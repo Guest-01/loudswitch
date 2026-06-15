@@ -24,7 +24,7 @@ updated: 2026-06-15
   쓰면 속성 변경 알림이 발생해 APO가 즉시 재로드된다. `audiosrv` 재시작은 *레지스트리 직접 쓰기*
   방식의 임시방편일 뿐이며, 부작용(오디오 끊김·앱 충돌·`AUDCLNT_E_DEVICE_INVALIDATED`)이 있어 피한다.
 - ⚠️ **드라이버 의존적이다.** Realtek HD Audio 등 해당 APO를 제공하는 엔드포인트에서만 동작한다.
-- 권장 스택: **C# / .NET 8 트레이 앱 + 이벤트 기반(WMI) 프로세스 감지 + IPolicyConfig**.
+- 권장 스택: **C# / .NET 10 (LTS) 트레이 앱 + 이벤트 기반(WMI) 프로세스 감지 + IPolicyConfig**.
 
 ---
 
@@ -121,12 +121,12 @@ Win11의 `IAudioSystemEffectsPropertyStore`가 문서화된 정식 API지만,
 
 | 스택 | 평가 |
 |---|---|
-| **C# / .NET 8** ⭐ | COM 상호운용 1급(IPolicyConfig 선언 + NAudio/CSCore), WMI 이벤트 내장(`ManagementEventWatcher`), 트레이 앱 쉬움. AOT/trim 시 ~15–30MB. **개발 속도·효율 균형 최적 → 채택.** |
+| **C# / .NET 10 (LTS)** ⭐ | COM 상호운용 1급(IPolicyConfig 선언 + NAudio/CSCore), WMI 이벤트 내장(`ManagementEventWatcher`), 트레이 앱 쉬움. AOT/trim 시 ~15–30MB. 2025-11 출시 LTS(2028-11까지 지원)라 장기 상주 앱에 적합. **개발 속도·효율 균형 최적 → 채택.** |
 | Rust + windows-rs | 최소 풋프린트(바이너리 ~1–3MB, RAM ~2–5MB, GC 없음). windows-rs는 제로코스트 바인딩이라 "추상 레이어" 우려 없음. 단 COM 보일러플레이트·unsafe 비용. |
 | Go | ❌ 런타임(GC, 스케줄러) 오버헤드 + COM(go-ole) 상호운용 빈약. COM 중심 작업에 부적합. |
 | PowerShell 상주 | ❌ 런타임 통째 상주(~30–60MB+), 장기 서비스로 투박. "최소 오버헤드"와 반대. |
 
-**결정: C# / .NET 8 트레이 앱.**
+**결정: C# / .NET 10 (LTS) 트레이 앱.**
 - 숨김 트레이 앱 → 사용자 세션에서 동작하므로 IPolicyConfig 권한 문제 없음.
 - WMI 이벤트로 대상 프로세스 시작/종료 구독.
 - 이벤트 시 IPolicyConfig로 Loudness EQ 키 토글(즉시 적용, 서비스 재시작 없음).
@@ -137,6 +137,21 @@ Win11의 `IAudioSystemEffectsPropertyStore`가 문서화된 정식 API지만,
 3. WMI로 대상 프로세스 시작/종료 이벤트 구독.
 4. 시작 → `SetPropertyValue(id, TRUE, loudnessKey, ON)`, 종료 → `... OFF`.
 5. 쓰기 전 `GetPropertyValue`로 키 존재/현재 값 확인, 미지원 시 skip.
+
+### 개발 환경 — Windows 네이티브 (WSL 비권장)
+
+**결정: Windows 파일시스템에 클론하여 Windows 네이티브 툴체인으로 개발한다.**
+
+이 앱이 의존하는 요소(Core Audio COM `IPolicyConfig`, 레지스트리 FxProperties,
+`audiodg.exe`/`audiosrv`, WMI `Win32_Process` 이벤트, 시스템 트레이 + WinForms/WPF 런타임)는
+모두 **WSL2(리눅스 VM) 안에 존재하지 않는다.** 코드는 어디서든 컴파일되지만,
+`read → flip → write-back`이 실제로 먹히는지·APO가 즉시 재로드되는지 등의 **실행·검증이 불가능**하다.
+이 프로젝트는 "빌드 → 실행 → 오디오 토글 → 레지스트리/소리 변화 관찰"의 반복이 핵심이라
+실행 환경이 곧 Windows여야 한다.
+
+- 저장소는 **Windows 파일시스템(NTFS, 예: `C:\dev\loudswitch`)** 에 둔다.
+  `/mnt/c/...`를 WSL에서 빌드하면 I/O가 느리고 파일 감시(inotify)가 부실하므로 피한다.
+- 툴체인: Visual Studio / Rider / Windows용 VS Code + Windows `dotnet`.
 
 ---
 
