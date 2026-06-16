@@ -118,26 +118,30 @@ Win11의 `IAudioSystemEffectsPropertyStore`가 문서화된 정식 API지만,
 
 요구사항: 항상 상주, 특정 프로세스 시작/종료 감지 → Loudness ON/OFF, 최소 오버헤드.
 
-> **언어보다 감지 방식이 오버헤드를 결정한다.** 폴링 대신 **이벤트 기반**
-> (WMI `__InstanceCreationEvent` / `__InstanceDeletionEvent` on `Win32_Process`, 또는 ETW)을 쓰면
-> 대상이 뜰 때까지 0% CPU로 대기한다.
+> **감지 방식 결정: 셀프 폴링(`Process.GetProcessesByName`, 1~2초).** (2026-06-16 갱신)
+> 후보 비교 결과 — WMI `__InstanceCreationEvent WITHIN n`은 "이벤트"처럼 보이지만 내부적으로 WMI
+> 서비스가 전체 프로세스를 주기 스냅샷(=폴링)해 무겁고, edge 트리거라 한 번 놓치면 상태가 어긋난다.
+> `Win32_ProcessStartTrace`(ETW)는 진짜 push지만 **관리자 권한**을 요구해 무권한 원칙과 상충한다.
+> 셀프 폴링은 **순수 BCL(외부 의존성 0)** + 이름만 열거해 가볍고, **level 트리거라 매 틱 현재 상태를
+> 재평가해 자가 치유**(절전/재개·이벤트 누락에 강함)된다. loudness 토글은 1~2초 지연이 무방하다.
 
 | 스택 | 평가 |
 |---|---|
-| **C# / .NET 10 (LTS)** ⭐ | COM 상호운용 1급(IPolicyConfig 선언 + NAudio/CSCore), WMI 이벤트 내장(`ManagementEventWatcher`), 트레이 앱 쉬움. AOT/trim 시 ~15–30MB. 2025-11 출시 LTS(2028-11까지 지원)라 장기 상주 앱에 적합. **개발 속도·효율 균형 최적 → 채택.** |
+| **C# / .NET 10 (LTS)** ⭐ | COM 상호운용 1급(IPolicyConfig 선언 + NAudio/CSCore), 프로세스 열거 BCL 내장(`Process.GetProcessesByName`), 트레이 앱 쉬움. AOT/trim 시 ~15–30MB. 2025-11 출시 LTS(2028-11까지 지원)라 장기 상주 앱에 적합. **개발 속도·효율 균형 최적 → 채택.** |
 | Rust + windows-rs | 최소 풋프린트(바이너리 ~1–3MB, RAM ~2–5MB, GC 없음). windows-rs는 제로코스트 바인딩이라 "추상 레이어" 우려 없음. 단 COM 보일러플레이트·unsafe 비용. |
 | Go | ❌ 런타임(GC, 스케줄러) 오버헤드 + COM(go-ole) 상호운용 빈약. COM 중심 작업에 부적합. |
 | PowerShell 상주 | ❌ 런타임 통째 상주(~30–60MB+), 장기 서비스로 투박. "최소 오버헤드"와 반대. |
 
 **결정: C# / .NET 10 (LTS) 트레이 앱.**
 - 숨김 트레이 앱 → 사용자 세션에서 동작하므로 IPolicyConfig 권한 문제 없음.
-- WMI 이벤트로 대상 프로세스 시작/종료 구독.
-- 이벤트 시 IPolicyConfig로 Loudness EQ 키 토글(즉시 적용, 서비스 재시작 없음).
+- 셀프 폴링(`Process.GetProcessesByName`, 1~2초)으로 대상 프로세스 시작/종료 감지(무권한·level 트리거·자가치유).
+- 상태 변화 시 IPolicyConfig로 Loudness EQ 키 토글(즉시 적용, 서비스 재시작 없음).
 
 ### 구현 골격
 1. COM(STA) 초기화.
 2. `IMMDeviceEnumerator`로 기본 출력 엔드포인트 ID 획득.
-3. WMI로 대상 프로세스 시작/종료 이벤트 구독.
+3. 타이머로 대상 프로세스 존재를 1~2초마다 폴링해 시작/종료 감지(존재 여부 edge 검출).
+   (종료 감지는 이후 `Process.Exited` 이벤트로 최적화 가능 — 무권한·즉시.)
 4. 시작 → `SetPropertyValue(id, TRUE, loudnessKey, ON)`, 종료 → `... OFF`.
 5. 쓰기 전 `GetPropertyValue`로 키 존재/현재 값 확인, 미지원 시 skip.
 
@@ -198,6 +202,9 @@ Win11의 `IAudioSystemEffectsPropertyStore`가 문서화된 정식 API지만,
   재시작 필요. 단, *API 경로*는 즉시 적용되는 별개 사실.)
 - ❌ FxProperties 내 설정이 단순히 0/1 데이터를 갖는 또 다른 GUID 값이다. (0-3 기각 —
   실제론 직렬화 PROPVARIANT)
+- ❌ WMI `__InstanceCreationEvent WITHIN` 구독은 "이벤트 기반이라 0% CPU"다. (2026-06-16 기각 —
+  내부적으로 전체 프로세스를 주기 폴링해 무겁고 edge 트리거. 진짜 push인 `Win32_ProcessStartTrace`는
+  관리자 필요. → 무권한·경량·자가치유를 위해 **셀프 폴링** 채택. §4 참고.)
 
 ---
 
