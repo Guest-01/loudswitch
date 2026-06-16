@@ -20,6 +20,7 @@ internal static class Program
             "set" => RunSet(args),
             "toggle" => RunToggle(args),
             "watch" => RunWatch(args),
+            "auto" => RunAuto(args),
             _ => Usage(),
         };
     }
@@ -190,6 +191,82 @@ internal static class Program
     private static void Log(string message) =>
         Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {message}");
 
+    // ---------------------------------------------------------------- 슬라이스 4: 통합(감지→토글)
+
+    private static int RunAuto(string[] args)
+    {
+        // auto <processName> [deviceGuid]   (deviceGuid 생략 시 기본 출력 장치)
+        if (args.Length < 2)
+            return Usage();
+
+        string name = args[1];
+
+        string? endpointId;
+        if (args.Length >= 3)
+        {
+            endpointId = ResolveEndpointId(args[2]);
+            if (endpointId is null)
+                return DeviceNotFound(args[2]);
+        }
+        else
+        {
+            endpointId = TryGetDefaultId();
+            if (endpointId is null)
+            {
+                Console.Error.WriteLine("기본 출력 장치를 찾지 못했습니다.");
+                return 1;
+            }
+        }
+
+        LoudnessEqualizationSetting.Report initial = LoudnessEqualizationSetting.Read(endpointId);
+        Console.WriteLine($"대상 엔드포인트: {endpointId}");
+        Console.WriteLine($"현재 Loudness : {DescribeState(initial)}");
+        if (initial.State == LoudnessEqualizationSetting.State.Unsupported)
+            Console.WriteLine("주의: 이 장치는 Loudness EQ 미노출 → 토글은 skip되고 감지 로그만 출력됩니다.");
+        Console.WriteLine($"'{name}' 감시 시작. 시작=ON / 종료=OFF. Ctrl+C로 종료.\n");
+
+        using var watcher = new ProcessWatcher(name);
+        watcher.Started += count =>
+        {
+            Log($"시작 감지: '{name}' (인스턴스 {count}개) → ON");
+            ApplyAuto(endpointId, on: true);
+        };
+        watcher.Stopped += () =>
+        {
+            Log($"종료 감지: '{name}' → OFF");
+            ApplyAuto(endpointId, on: false);
+        };
+        watcher.Start();
+
+        using var exit = new ManualResetEventSlim(false);
+        Console.CancelKeyPress += (_, e) =>
+        {
+            e.Cancel = true;
+            exit.Set();
+        };
+        exit.Wait();
+
+        Console.WriteLine("\n감시 종료.");
+        return 0;
+    }
+
+    /// <summary>
+    /// 토글 직전에 키 존재를 다시 확인해 미지원 장치엔 쓰지 않는다(force-create 금지 원칙).
+    /// </summary>
+    private static void ApplyAuto(string endpointId, bool on)
+    {
+        LoudnessEqualizationSetting.Report state = LoudnessEqualizationSetting.Read(endpointId);
+        if (state.State == LoudnessEqualizationSetting.State.Unsupported)
+        {
+            Log("  → 미지원 (키 없음) → 토글 skip (force-create 안 함)");
+            return;
+        }
+
+        int hr = PolicyConfig.SetLoudness(endpointId, on);
+        LoudnessEqualizationSetting.Report after = LoudnessEqualizationSetting.Read(endpointId);
+        Log($"  → HRESULT 0x{hr:X8} ({(hr == 0 ? "S_OK" : "실패")}), 상태: {DescribeState(after)}");
+    }
+
     // ---------------------------------------------------------------- 공용
 
     /// <summary>
@@ -250,6 +327,7 @@ internal static class Program
         Console.WriteLine("  dotnet run -- set <guid> on|off    IPolicyConfig로 Loudness 쓰기");
         Console.WriteLine("  dotnet run -- toggle <guid>        현재 상태의 반대로 토글");
         Console.WriteLine("  dotnet run -- watch <name> [ms]    프로세스 시작/종료 감지 (로그만)");
+        Console.WriteLine("  dotnet run -- auto <name> [guid]   프로세스 감지 → Loudness 토글 (guid 없으면 기본 장치)");
         return 2;
     }
 
