@@ -1,7 +1,10 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
+    <!-- 트레이(WinForms NotifyIcon) 사용. OutputType은 콘솔(Exe) 유지 — 개발 중 dev 서브커맨드
+         출력을 그대로 보기 위함. "콘솔 창 없는 WinExe" 전환은 패키징(슬라이스 6)에서. -->
     <OutputType>Exe</OutputType>
+    <UseWindowsForms>true</UseWindowsForms>
     <TargetFramework>net10.0-windows</TargetFramework>
     <RootNamespace>Loudswitch</RootNamespace>
     <AssemblyName>Loudswitch</AssemblyName>

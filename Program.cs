@@ -1,7 +1,9 @@
 using System.Text;
+using System.Windows.Forms;
 using Loudswitch.Audio;
 using Loudswitch.Detection;
 using Loudswitch.Interop;
+using Loudswitch.Tray;
 
 namespace Loudswitch;
 
@@ -10,13 +12,13 @@ internal static class Program
     [STAThread]
     private static int Main(string[] args)
     {
-        TrySetUtf8Console();
-
         if (args.Length == 0)
-            return ListDevices();
+            return RunTray();
 
+        TrySetUtf8Console();
         return args[0].ToLowerInvariant() switch
         {
+            "list" => ListDevices(),
             "set" => RunSet(args),
             "toggle" => RunToggle(args),
             "watch" => RunWatch(args),
@@ -250,21 +252,51 @@ internal static class Program
         return 0;
     }
 
-    /// <summary>
-    /// 토글 직전에 키 존재를 다시 확인해 미지원 장치엔 쓰지 않는다(force-create 금지 원칙).
-    /// </summary>
     private static void ApplyAuto(string endpointId, bool on)
     {
-        LoudnessEqualizationSetting.Report state = LoudnessEqualizationSetting.Read(endpointId);
-        if (state.State == LoudnessEqualizationSetting.State.Unsupported)
+        switch (LoudnessController.Apply(endpointId, on))
         {
-            Log("  → 미지원 (키 없음) → 토글 skip (force-create 안 함)");
-            return;
+            case LoudnessController.ApplyResult.SkippedUnsupported:
+                Log("  → 미지원 (키 없음) → 토글 skip (force-create 안 함)");
+                break;
+            case LoudnessController.ApplyResult.Failed:
+                Log("  → SetPropertyValue 실패 (S_OK 아님)");
+                break;
+            case LoudnessController.ApplyResult.Set:
+                Log($"  → OK, 상태: {DescribeState(LoudnessEqualizationSetting.Read(endpointId))}");
+                break;
+        }
+    }
+
+    // ---------------------------------------------------------------- 슬라이스 5: 트레이
+
+    private static int RunTray()
+    {
+        Config config = Config.LoadOrCreateDefault(out bool created);
+
+        string? endpointId = config.DeviceGuid is null
+            ? TryGetDefaultId()
+            : ResolveEndpointId(config.DeviceGuid);
+
+        if (endpointId is null)
+        {
+            MessageBox.Show(
+                $"대상 장치를 찾지 못했습니다.\n\nconfig: {Config.FilePath}\nDeviceGuid: {config.DeviceGuid ?? "(기본 출력 장치)"}",
+                "Loudswitch", MessageBoxButtons.OK, MessageBoxIcon.Warning);
+            return 1;
         }
 
-        int hr = PolicyConfig.SetLoudness(endpointId, on);
-        LoudnessEqualizationSetting.Report after = LoudnessEqualizationSetting.Read(endpointId);
-        Log($"  → HRESULT 0x{hr:X8} ({(hr == 0 ? "S_OK" : "실패")}), 상태: {DescribeState(after)}");
+        if (created)
+        {
+            MessageBox.Show(
+                $"설정 파일을 생성했습니다:\n{Config.FilePath}\n\n대상 프로세스/장치를 바꾸려면 이 파일을 편집 후 재시작하세요.",
+                "Loudswitch", MessageBoxButtons.OK, MessageBoxIcon.Information);
+        }
+
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+        Application.Run(new TrayApplicationContext(config.ProcessName, endpointId));
+        return 0;
     }
 
     // ---------------------------------------------------------------- 공용
@@ -323,7 +355,8 @@ internal static class Program
     private static int Usage()
     {
         Console.WriteLine("사용법:");
-        Console.WriteLine("  dotnet run                         활성 출력 장치 + Loudness 상태 나열");
+        Console.WriteLine("  dotnet run                         트레이 앱 실행 (config.json 대상)");
+        Console.WriteLine("  dotnet run -- list                 활성 출력 장치 + Loudness 상태 나열");
         Console.WriteLine("  dotnet run -- set <guid> on|off    IPolicyConfig로 Loudness 쓰기");
         Console.WriteLine("  dotnet run -- toggle <guid>        현재 상태의 반대로 토글");
         Console.WriteLine("  dotnet run -- watch <name> [ms]    프로세스 시작/종료 감지 (로그만)");
