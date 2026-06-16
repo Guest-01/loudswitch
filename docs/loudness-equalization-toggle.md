@@ -1,8 +1,8 @@
 ---
 title: Windows Loudness Equalization 프로그램 토글 — 사전 조사
-status: draft (조사 단계)
+status: 구현 진행 (슬라이스 0–2 완료)
 created: 2026-06-15
-updated: 2026-06-15
+updated: 2026-06-16
 ---
 
 # Windows Loudness Equalization 프로그램 토글 — 사전 조사
@@ -51,11 +51,14 @@ HKLM\SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render\{장치GUI
 > 마스터 스위치는 사운드 설정의 "오디오 향상 사용" 체크박스에 매핑된다. **개별 Loudness EQ만**
 > 토글하려면 첫 번째 키를 써야 한다.
 
-### 값 형식 주의
+### 값 형식 — 실측 완료 (2026-06-16)
 
-켜기 바이트(`0b,00,00,00,...`)만 출처에서 확인됨. **끄기 값의 정확한 형식은 미확정.**
-형식을 추측하지 말고 **read → flip → write-back** 패턴을 쓴다:
-켜진 상태와 꺼진 상태의 PROPVARIANT를 각각 한 번씩 읽어두면 안전하게 토글할 수 있다.
+직렬화 PROPVARIANT(VT_BOOL)이며, 슬라이스 2에서 IPolicyConfig로 켜고/끄며 read-back해 **두 값 모두 확정**:
+
+- ON  = `hex:0b,00,00,00,01,00,00,00,ff,ff,00,00` (VARIANT_TRUE)
+- OFF = `hex:0b,00,00,00,01,00,00,00,00,00,00,00` (VARIANT_FALSE)
+
+마지막 워드만 `0xFFFF ↔ 0x0000`으로 바뀐다. (당초 OFF 형식 미확정 → 추측 없이 read→flip→write로 해소.)
 
 ---
 
@@ -153,11 +156,31 @@ Win11의 `IAudioSystemEffectsPropertyStore`가 문서화된 정식 API지만,
   `/mnt/c/...`를 WSL에서 빌드하면 I/O가 느리고 파일 감시(inotify)가 부실하므로 피한다.
 - 툴체인: Visual Studio / Rider / Windows용 VS Code + Windows `dotnet`.
 
+### 개발 환경 실측 메모 (2026-06-16)
+
+이 개발 PC는 활성 출력 3개 모두 Loudness EQ를 **네이티브로 노출하지 않음**(기본 "스피커"는 FX 값
+138개의 벤더 APO 스택, 나머지는 빈 FxProperties). 따라서 검증용으로만 빈 엔드포인트
+`{3ecd2d07-...}`("스피커")에 MS 기본 APO + Loudness 키를 **force-create**해 테스트베드를 구성했다.
+
+- 스크립트: `dev/Setup-LoudnessTestbed.ps1` (주입 / `-Revert`). **앱 범위 아님** — 앱은 노출된 경우만 토글.
+- 권한 함정: MMDevices 키는 SYSTEM 소유이고 Administrators엔 `SetValue, ReadKey`만 있음(CreateSubKey 없음).
+  PowerShell `New-ItemProperty`는 키를 `KEY_WRITE`(=SetValue+CreateSubKey)로 열어 거부됨 →
+  .NET `RegistryKey`를 정확히 `SetValue` 권한으로 열어 써야 함.
+
+## 구현 진행 현황
+
+- ✅ 슬라이스 0+1: .NET 10 콘솔 스캐폴딩 + **다중** 출력 장치 Loudness 상태 읽기(레지스트리, friendly name 포함).
+- ✅ 슬라이스 2: `IPolicyConfig::SetPropertyValue(bFxStore=TRUE)`로 ON/OFF 토글 —
+  **HRESULT S_OK, 관리자 권한 불필요**(§2 주장 검증), read-back 즉시 반영, ON/OFF 바이트 확정(§1).
+- ⏭ 다음: 슬라이스 3(WMI 프로세스 감지) → 4(통합) → 5(트레이 UI).
+- ⚠ 미검증(의도적 descope): "**귀에 들리는**" 즉시 APO 재로드. API 쓰기 경로 자체는 검증됨.
+
 ---
 
 ## 5. 미해결 질문 (구현 중 실측 필요)
 
-- [ ] Loudness EQ **끄기** 값의 정확한 PROPVARIANT 형식? (read-modify-write로 우회 예정)
+- [x] ~~Loudness EQ **끄기** 값의 정확한 PROPVARIANT 형식?~~ ✅ **해소 (2026-06-16)**:
+  `hex:0b,00,00,00,01,00,00,00,00,00,00,00` (VT_BOOL=FALSE). §1 "값 형식" 참고.
 - [ ] `{fc52a749-...},3` 키가 Realtek 외 드라이버(또는 MS 기본 HD Audio 드라이버)에서도 동일하게 동작하는가?
 - [ ] Win11 24H2+에서 FxProperties 쓰기가 새 설정 UI에 의해 덮어써지지 않고 영속되는가?
 - [ ] 다중 출력 장치 환경에서 "기본 장치 변경" 시 토글 대상 갱신 처리.
