@@ -1,5 +1,6 @@
 using System.Text;
 using Loudswitch.Audio;
+using Loudswitch.Detection;
 using Loudswitch.Interop;
 
 namespace Loudswitch;
@@ -18,6 +19,7 @@ internal static class Program
         {
             "set" => RunSet(args),
             "toggle" => RunToggle(args),
+            "watch" => RunWatch(args),
             _ => Usage(),
         };
     }
@@ -153,6 +155,41 @@ internal static class Program
         return 0;
     }
 
+    // ---------------------------------------------------------------- 슬라이스 3: 감지(로그만)
+
+    private static int RunWatch(string[] args)
+    {
+        // watch <processName> [intervalMs]
+        if (args.Length < 2)
+            return Usage();
+
+        string name = args[1];
+        int interval = 1500;
+        if (args.Length >= 3 && int.TryParse(args[2], out int n) && n >= 200)
+            interval = n;
+
+        using var watcher = new ProcessWatcher(name, interval);
+        watcher.Started += count => Log($"시작 감지: '{name}' (인스턴스 {count}개)");
+        watcher.Stopped += () => Log($"종료 감지: '{name}'");
+
+        Console.WriteLine($"'{name}' 감시 시작 (폴링 {interval}ms). Ctrl+C로 종료.\n");
+        watcher.Start();
+
+        using var exit = new ManualResetEventSlim(false);
+        Console.CancelKeyPress += (_, e) =>
+        {
+            e.Cancel = true; // 즉시 강제 종료 대신 정상 종료 경로로
+            exit.Set();
+        };
+        exit.Wait();
+
+        Console.WriteLine("\n감시 종료.");
+        return 0;
+    }
+
+    private static void Log(string message) =>
+        Console.WriteLine($"[{DateTime.Now:HH:mm:ss}] {message}");
+
     // ---------------------------------------------------------------- 공용
 
     /// <summary>
@@ -212,6 +249,7 @@ internal static class Program
         Console.WriteLine("  dotnet run                         활성 출력 장치 + Loudness 상태 나열");
         Console.WriteLine("  dotnet run -- set <guid> on|off    IPolicyConfig로 Loudness 쓰기");
         Console.WriteLine("  dotnet run -- toggle <guid>        현재 상태의 반대로 토글");
+        Console.WriteLine("  dotnet run -- watch <name> [ms]    프로세스 시작/종료 감지 (로그만)");
         return 2;
     }
 
