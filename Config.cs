@@ -18,6 +18,12 @@ internal sealed class Config
     /// </summary>
     public string? DeviceGuid { get; set; } = "{3ecd2d07-4d4f-480e-9553-b03a2947a222}";
 
+    /// <summary>프로세스 폴링 간격(ms). 최소 200.</summary>
+    public int PollingIntervalMs { get; set; } = 1500;
+
+    /// <summary>비활성화/종료 시 Loudness를 OFF로 복원할지.</summary>
+    public bool RestoreOffOnDisable { get; set; } = true;
+
     public static string Dir => Path.Combine(
         Environment.GetFolderPath(Environment.SpecialFolder.ApplicationData), "Loudswitch");
 

@@ -50,7 +50,7 @@ internal static class Program
             return 0;
         }
 
-        string? defaultId = TryGetDefaultId();
+        string? defaultId = EndpointResolver.Default();
         Console.WriteLine($"활성 출력 장치 {endpointIds.Count}개:\n");
 
         int index = 1;
@@ -96,7 +96,7 @@ internal static class Program
         if (mode != "on" && mode != "off")
             return Usage();
 
-        string? endpointId = ResolveEndpointId(args[1]);
+        string? endpointId = EndpointResolver.Resolve(args[1]);
         if (endpointId is null)
             return DeviceNotFound(args[1]);
 
@@ -109,7 +109,7 @@ internal static class Program
         if (args.Length < 2)
             return Usage();
 
-        string? endpointId = ResolveEndpointId(args[1]);
+        string? endpointId = EndpointResolver.Resolve(args[1]);
         if (endpointId is null)
             return DeviceNotFound(args[1]);
 
@@ -203,21 +203,13 @@ internal static class Program
 
         string name = args[1];
 
-        string? endpointId;
-        if (args.Length >= 3)
+        string? endpointId = EndpointResolver.Resolve(args.Length >= 3 ? args[2] : null);
+        if (endpointId is null)
         {
-            endpointId = ResolveEndpointId(args[2]);
-            if (endpointId is null)
-                return DeviceNotFound(args[2]);
-        }
-        else
-        {
-            endpointId = TryGetDefaultId();
-            if (endpointId is null)
-            {
-                Console.Error.WriteLine("기본 출력 장치를 찾지 못했습니다.");
-                return 1;
-            }
+            Console.Error.WriteLine(args.Length >= 3
+                ? $"장치를 찾지 못했습니다: {args[2]}"
+                : "기본 출력 장치를 찾지 못했습니다.");
+            return 1;
         }
 
         LoudnessEqualizationSetting.Report initial = LoudnessEqualizationSetting.Read(endpointId);
@@ -274,68 +266,20 @@ internal static class Program
     {
         Config config = Config.LoadOrCreateDefault(out bool created);
 
-        string? endpointId = config.DeviceGuid is null
-            ? TryGetDefaultId()
-            : ResolveEndpointId(config.DeviceGuid);
-
-        if (endpointId is null)
-        {
-            MessageBox.Show(
-                $"대상 장치를 찾지 못했습니다.\n\nconfig: {Config.FilePath}\nDeviceGuid: {config.DeviceGuid ?? "(기본 출력 장치)"}",
-                "Loudswitch", MessageBoxButtons.OK, MessageBoxIcon.Warning);
-            return 1;
-        }
-
         if (created)
         {
             MessageBox.Show(
-                $"설정 파일을 생성했습니다:\n{Config.FilePath}\n\n대상 프로세스/장치를 바꾸려면 이 파일을 편집 후 재시작하세요.",
+                $"설정 파일을 생성했습니다:\n{Config.FilePath}\n\n트레이 아이콘 우클릭 → '설정...'에서 대상 프로세스·장치를 바꿀 수 있습니다.",
                 "Loudswitch", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
         Application.EnableVisualStyles();
         Application.SetCompatibleTextRenderingDefault(false);
-        Application.Run(new TrayApplicationContext(config.ProcessName, endpointId));
+        Application.Run(new TrayApplicationContext(config));
         return 0;
     }
 
     // ---------------------------------------------------------------- 공용
-
-    /// <summary>
-    /// 인자가 전체 엔드포인트 ID면 그대로, 장치 {GUID}면 열거해서 전체 엔드포인트 ID로 변환한다.
-    /// IPolicyConfig는 전체 엔드포인트 ID를 요구하므로 변환이 필요하다.
-    /// </summary>
-    private static string? ResolveEndpointId(string arg)
-    {
-        string normGuid = NormalizeGuid(arg);
-
-        IReadOnlyList<string> ids;
-        try
-        {
-            ids = CoreAudio.GetRenderEndpointIds(activeOnly: false);
-        }
-        catch
-        {
-            return null;
-        }
-
-        foreach (string id in ids)
-        {
-            if (string.Equals(id, arg, StringComparison.OrdinalIgnoreCase))
-                return id;
-            if (string.Equals(MMDevicePaths.DeviceGuid(id), normGuid, StringComparison.OrdinalIgnoreCase))
-                return id;
-        }
-        return null;
-    }
-
-    private static string NormalizeGuid(string s)
-    {
-        s = s.Trim();
-        if (!s.StartsWith('{'))
-            s = "{" + s.Trim('{', '}') + "}";
-        return s;
-    }
 
     private static string DescribeState(LoudnessEqualizationSetting.Report r) => r.State switch
     {
@@ -362,18 +306,6 @@ internal static class Program
         Console.WriteLine("  dotnet run -- watch <name> [ms]    프로세스 시작/종료 감지 (로그만)");
         Console.WriteLine("  dotnet run -- auto <name> [guid]   프로세스 감지 → Loudness 토글 (guid 없으면 기본 장치)");
         return 2;
-    }
-
-    private static string? TryGetDefaultId()
-    {
-        try
-        {
-            return CoreAudio.GetDefaultRenderEndpointId();
-        }
-        catch
-        {
-            return null;
-        }
     }
 
     private static string Hex(byte[] bytes) =>

@@ -27,4 +27,11 @@ internal static class MMDevicePaths
     /// <summary>장치 메타데이터 저장소. friendly name 등이 여기 있다.</summary>
     public static string Properties(string endpointId) =>
         $@"{RenderRoot}\{DeviceGuid(endpointId)}\Properties";
+
+    /// <summary>중괄호 보정: "xxxx" → "{xxxx}", 이미 중괄호면 그대로.</summary>
+    public static string NormalizeGuid(string s)
+    {
+        s = s.Trim();
+        return s.StartsWith('{') ? s : "{" + s.Trim('{', '}') + "}";
+    }
 }
