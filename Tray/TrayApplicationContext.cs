@@ -15,6 +15,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     private readonly NotifyIcon _icon;
     private readonly ToolStripMenuItem _enabledItem;
     private readonly ToolStripMenuItem _statusItem;
+    private readonly System.Windows.Forms.Timer _defaultDeviceTimer = new() { Interval = 3000 };
 
     private Config _config;
     private string _processName;
@@ -41,12 +42,13 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
         _icon = new NotifyIcon
         {
-            Icon = SystemIcons.Application,
+            Icon = TrayIcons.Create(active: true),
             Visible = true,
             Text = "Loudswitch",
             ContextMenuStrip = menu,
         };
         _icon.DoubleClick += (_, _) => OpenSettings(); // 더블클릭으로 설정 열기
+        _defaultDeviceTimer.Tick += (_, _) => CheckDefaultDevice();
 
         SetEnabled(true); // 시작 시 활성화(이미 떠 있으면 첫 폴링에서 ON 동기화)
     }
@@ -58,19 +60,58 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
         if (enable)
         {
-            _watcher = new ProcessWatcher(_processName, _config.PollingIntervalMs);
-            // 콜백은 스레드풀(MTA) 스레드 — UI는 건드리지 않고 토글만 수행(슬라이스 4에서 검증).
-            _watcher.Started += _ => ApplyIfPossible(true);
-            _watcher.Stopped += () => ApplyIfPossible(false);
-            _watcher.Start();
+            StartWatcher();
+            _defaultDeviceTimer.Start(); // 자동(기본 장치) 모드일 때 기본 장치 변경 추적
         }
         else
         {
+            _defaultDeviceTimer.Stop();
             _watcher?.Dispose();
             _watcher = null;
             if (_config.RestoreOffOnDisable)
                 ApplyIfPossible(false); // 비활성화 시 OFF 복원(설정에 따라)
         }
+
+        RefreshStatus();
+        UpdateTooltip();
+        UpdateIcon();
+    }
+
+    private void UpdateIcon()
+    {
+        Icon? previous = _icon.Icon;
+        _icon.Icon = TrayIcons.Create(_enabled); // 활성=컬러 / 비활성=회색
+        previous?.Dispose();
+    }
+
+    private void StartWatcher()
+    {
+        _watcher = new ProcessWatcher(_processName, _config.PollingIntervalMs);
+        // 콜백은 스레드풀(MTA) 스레드 — UI는 건드리지 않고 토글만 수행(슬라이스 4에서 검증).
+        _watcher.Started += _ => ApplyIfPossible(true);
+        _watcher.Stopped += () => ApplyIfPossible(false);
+        _watcher.Start();
+    }
+
+    /// <summary>
+    /// "기본 출력 장치(자동)" 모드에서 기본 장치가 바뀌면 대상 엔드포인트를 따라간다.
+    /// COM 콜백 대신 폴링(WinForms 타이머, UI 스레드) — 프로세스 감지와 같은 자가치유 방식.
+    /// </summary>
+    private void CheckDefaultDevice()
+    {
+        if (!_enabled || _config.DeviceGuid is not null)
+            return; // 자동 모드에서만 추적
+
+        string? current = EndpointResolver.Default();
+        if (current is null || current == _endpointId)
+            return;
+
+        if (_config.RestoreOffOnDisable)
+            ApplyIfPossible(false); // 이전 기본 장치 복원
+
+        _endpointId = current;
+        _watcher?.Dispose();
+        StartWatcher(); // 새 장치에 현재 프로세스 상태 재동기화
 
         RefreshStatus();
         UpdateTooltip();
@@ -140,6 +181,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         if (_config.RestoreOffOnDisable)
             ApplyIfPossible(false); // 종료 시 OFF 복원(설정에 따라)
         _icon.Visible = false;
+        _icon.Icon?.Dispose();
         _icon.Dispose();
         ExitThread();
     }
@@ -148,6 +190,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
     {
         if (disposing)
         {
+            _defaultDeviceTimer.Dispose();
             _watcher?.Dispose();
             _icon.Dispose();
         }

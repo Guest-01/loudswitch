@@ -27,6 +27,7 @@ internal sealed class SettingsForm : Form
     private readonly ComboBox _customCombo = new();
     private readonly ComboBox _device = new();
     private readonly CheckBox _restoreOff = new();
+    private readonly CheckBox _autostart = new();
     private readonly NumericUpDown _interval = new();
 
     public SettingsForm(Config config)
@@ -38,14 +39,14 @@ internal sealed class SettingsForm : Form
         StartPosition = FormStartPosition.CenterScreen;
         MaximizeBox = false;
         MinimizeBox = false;
-        ClientSize = new Size(400, 472);
+        ClientSize = new Size(400, 500);
 
         var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12), ColumnCount = 1, RowCount = 5 };
         root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));   // 안내문
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 146));  // 대상 프로그램
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 92));   // 출력 장치
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 120));  // 동작
+        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 148));  // 동작
         root.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));   // 버튼
         Controls.Add(root);
 
@@ -177,33 +178,41 @@ internal sealed class SettingsForm : Form
     {
         var gb = new GroupBox { Text = "동작", Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 8), Padding = new Padding(8, 6, 8, 8) };
 
-        var tlp = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 3 };
+        var tlp = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 4 };
         tlp.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         tlp.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         tlp.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
+        tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+
+        _autostart.Text = "Windows 시작 시 자동 실행";
+        _autostart.AutoSize = true;
+        _autostart.Anchor = AnchorStyles.Left;
+        _autostart.Checked = Autostart.IsEnabled();
+        tlp.Controls.Add(_autostart, 0, 0);
+        tlp.SetColumnSpan(_autostart, 3);
 
         _restoreOff.Text = "감시를 끄거나 앱을 종료하면 평준화도 함께 끄기";
         _restoreOff.AutoSize = true;
         _restoreOff.Anchor = AnchorStyles.Left;
         _restoreOff.Checked = config.RestoreOffOnDisable;
-        tlp.Controls.Add(_restoreOff, 0, 0);
+        tlp.Controls.Add(_restoreOff, 0, 1);
         tlp.SetColumnSpan(_restoreOff, 3);
 
-        tlp.Controls.Add(new Label { Text = "실행 확인 주기", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 5, 8, 0) }, 0, 1);
+        tlp.Controls.Add(new Label { Text = "실행 확인 주기", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 5, 8, 0) }, 0, 2);
         _interval.Anchor = AnchorStyles.Left;
         _interval.Width = 80;
         _interval.Minimum = MinIntervalMs;
         _interval.Maximum = 60000;
         _interval.Increment = 100;
         _interval.Value = Math.Clamp(config.PollingIntervalMs, MinIntervalMs, 60000);
-        tlp.Controls.Add(_interval, 1, 1);
-        tlp.Controls.Add(new Label { Text = "ms", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(4, 5, 0, 0) }, 2, 1);
+        tlp.Controls.Add(_interval, 1, 2);
+        tlp.Controls.Add(new Label { Text = "ms", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(4, 5, 0, 0) }, 2, 2);
 
         Label hint = Hint("작을수록 빨리 반응합니다. 최소 500ms, 보통 1500ms.");
-        tlp.Controls.Add(hint, 0, 2);
+        tlp.Controls.Add(hint, 0, 3);
         tlp.SetColumnSpan(hint, 3);
 
         gb.Controls.Add(tlp);
@@ -282,6 +291,7 @@ internal sealed class SettingsForm : Form
             RestoreOffOnDisable = _restoreOff.Checked,
         };
         cfg.Save();
+        Autostart.SetEnabled(_autostart.Checked); // 레지스트리 Run 키(별도 영속)
         Result = cfg;
     }
 

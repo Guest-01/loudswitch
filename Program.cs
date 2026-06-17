@@ -1,3 +1,4 @@
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Windows.Forms;
 using Loudswitch.Audio;
@@ -9,12 +10,21 @@ namespace Loudswitch;
 
 internal static class Program
 {
+    private static Mutex? _singleInstanceMutex;
+
+    private const int ATTACH_PARENT_PROCESS = -1;
+
+    [DllImport("kernel32.dll")]
+    private static extern bool AttachConsole(int dwProcessId);
+
     [STAThread]
     private static int Main(string[] args)
     {
         if (args.Length == 0)
             return RunTray();
 
+        // WinExe라 자체 콘솔이 없으므로, 터미널에서 dev 커맨드 실행 시 부모 콘솔에 붙여 출력한다.
+        AttachConsole(ATTACH_PARENT_PROCESS);
         TrySetUtf8Console();
         return args[0].ToLowerInvariant() switch
         {
@@ -264,6 +274,15 @@ internal static class Program
 
     private static int RunTray()
     {
+        // 단일 인스턴스: 이미 실행 중이면 알리고 종료. (Mutex는 프로세스 생명주기 동안 보관)
+        _singleInstanceMutex = new Mutex(initiallyOwned: true, @"Local\Loudswitch.SingleInstance", out bool createdNew);
+        if (!createdNew)
+        {
+            MessageBox.Show("Loudswitch가 이미 실행 중입니다. 시스템 트레이를 확인하세요.",
+                "Loudswitch", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            return 0;
+        }
+
         Config config = Config.LoadOrCreateDefault(out bool created);
 
         if (created)
