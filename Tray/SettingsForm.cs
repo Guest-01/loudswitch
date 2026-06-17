@@ -12,7 +12,9 @@ namespace Loudswitch.Tray;
 /// </summary>
 internal sealed class SettingsForm : Form
 {
-    private const int MinIntervalMs = 500;
+    // 콘텐츠 열 폭(px) — 줄바꿈 힌트의 기준 폭. DPI는 AutoScale이 비례 확대한다.
+    private const int ContentWidth = 376;
+    private const int GroupHintWidth = 348; // 그룹박스 내부(패딩/여백 제외) 줄바꿈 폭
 
     // 사전 지정 프로그램 (exe 이름, 표시명).
     private static readonly (string Exe, string Display)[] Presets =
@@ -34,25 +36,38 @@ internal sealed class SettingsForm : Form
     {
         Result = config;
 
+        // DPI/글꼴 변화에 대응: 96DPI Segoe UI 9pt 기준으로 레이아웃을 작성했음을 알린다.
+        AutoScaleDimensions = new SizeF(7F, 15F);
+        AutoScaleMode = AutoScaleMode.Font;
+
         Text = "Loudswitch 설정";
         FormBorderStyle = FormBorderStyle.FixedDialog;
         StartPosition = FormStartPosition.CenterScreen;
         MaximizeBox = false;
         MinimizeBox = false;
-        ClientSize = new Size(400, 500);
+        // 고정 픽셀 대신 콘텐츠에 맞춰 세로로 자라게 한다(긴 글꼴/번역/줄바꿈에도 잘리지 않음).
+        AutoSize = true;
+        AutoSizeMode = AutoSizeMode.GrowAndShrink;
 
-        var root = new TableLayoutPanel { Dock = DockStyle.Fill, Padding = new Padding(12), ColumnCount = 1, RowCount = 5 };
-        root.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 44));   // 안내문
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 146));  // 대상 프로그램
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 92));   // 출력 장치
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 148));  // 동작
-        root.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));   // 버튼
+        var root = new TableLayoutPanel
+        {
+            Dock = DockStyle.Fill,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            Padding = new Padding(12),
+            ColumnCount = 1,
+            RowCount = 5,
+        };
+        root.ColumnStyles.Add(new ColumnStyle(SizeType.Absolute, ContentWidth));
+        for (int i = 0; i < root.RowCount; i++)
+            root.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         Controls.Add(root);
 
         root.Controls.Add(new Label
         {
-            Dock = DockStyle.Fill,
+            AutoSize = true,
+            MaximumSize = new Size(ContentWidth - 8, 0), // 셀 여백 고려, 폭에서 줄바꿈(높이 자동)
+            Margin = new Padding(3, 3, 3, 10),
             Text = "선택한 프로그램이 켜져 있는 동안 음량 평준화(Loudness EQ)를 자동으로 켜고, 프로그램을 닫으면 다시 끕니다.",
         }, 0, 0);
 
@@ -67,15 +82,15 @@ internal sealed class SettingsForm : Form
 
     private GroupBox BuildTargetGroup(string currentProcess)
     {
-        var gb = new GroupBox { Text = "적용할 프로그램", Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 8), Padding = new Padding(8, 4, 8, 8) };
+        var gb = GroupBoxShell("적용할 프로그램", new Padding(8, 4, 8, 8));
 
         // 모든 토글 버튼을 같은 TableLayoutPanel에 둬서 자동 단일 선택을 유지한다.
         // 1행: 프리셋 3개 / 2행: '직접 선택' 버튼 + 콤보를 나란히(연관성 표시).
-        var tlp = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 3 };
+        var tlp = InnerPanel(3, 3);
         tlp.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
         tlp.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
         tlp.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100f / 3));
-        tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));   // 안내
+        tlp.RowStyles.Add(new RowStyle(SizeType.AutoSize));       // 안내
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 46));   // 프리셋 한 줄
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));   // 직접 선택 + 콤보 한 줄
 
@@ -137,6 +152,7 @@ internal sealed class SettingsForm : Form
         {
             all = Process.GetProcesses();
             string[] names = all
+                .Where(HasVisibleWindow) // 창 있는 사용자 앱만 → 시스템 프로세스 노이즈 제거
                 .Select(p => p.ProcessName)
                 .Where(n => !string.IsNullOrWhiteSpace(n))
                 .Distinct(StringComparer.OrdinalIgnoreCase)
@@ -155,14 +171,26 @@ internal sealed class SettingsForm : Form
         }
     }
 
+    private static bool HasVisibleWindow(Process p)
+    {
+        try
+        {
+            return p.MainWindowHandle != IntPtr.Zero;
+        }
+        catch
+        {
+            return false; // 접근 거부 등은 목록에서 제외(직접 입력으로 지정 가능)
+        }
+    }
+
     private GroupBox BuildDeviceGroup(string? currentGuid)
     {
-        var gb = new GroupBox { Text = "출력 장치", Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 8), Padding = new Padding(8, 6, 8, 8) };
+        var gb = GroupBoxShell("출력 장치", new Padding(8, 6, 8, 8));
 
-        var tlp = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 1, RowCount = 2 };
+        var tlp = InnerPanel(1, 2);
         tlp.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
-        tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 34));
+        tlp.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         _device.Dock = DockStyle.Fill;
         _device.DropDownStyle = ComboBoxStyle.DropDownList;
@@ -176,16 +204,16 @@ internal sealed class SettingsForm : Form
 
     private GroupBox BuildOptionsGroup(Config config)
     {
-        var gb = new GroupBox { Text = "동작", Dock = DockStyle.Fill, Margin = new Padding(0, 0, 0, 8), Padding = new Padding(8, 6, 8, 8) };
+        var gb = GroupBoxShell("동작", new Padding(8, 6, 8, 8));
 
-        var tlp = new TableLayoutPanel { Dock = DockStyle.Fill, ColumnCount = 3, RowCount = 4 };
+        var tlp = InnerPanel(3, 4);
         tlp.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         tlp.ColumnStyles.Add(new ColumnStyle(SizeType.AutoSize));
         tlp.ColumnStyles.Add(new ColumnStyle(SizeType.Percent, 100));
-        tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
-        tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 26));
+        tlp.RowStyles.Add(new RowStyle(SizeType.AutoSize));
+        tlp.RowStyles.Add(new RowStyle(SizeType.AutoSize));
         tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 28));
-        tlp.RowStyles.Add(new RowStyle(SizeType.Absolute, 30));
+        tlp.RowStyles.Add(new RowStyle(SizeType.AutoSize));
 
         _autostart.Text = "Windows 시작 시 자동 실행";
         _autostart.AutoSize = true;
@@ -204,14 +232,15 @@ internal sealed class SettingsForm : Form
         tlp.Controls.Add(new Label { Text = "실행 확인 주기", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(0, 5, 8, 0) }, 0, 2);
         _interval.Anchor = AnchorStyles.Left;
         _interval.Width = 80;
-        _interval.Minimum = MinIntervalMs;
-        _interval.Maximum = 60000;
+        _interval.Minimum = Config.MinPollingIntervalMs;
+        _interval.Maximum = Config.MaxPollingIntervalMs;
         _interval.Increment = 100;
-        _interval.Value = Math.Clamp(config.PollingIntervalMs, MinIntervalMs, 60000);
+        _interval.Value = Math.Clamp(
+            config.PollingIntervalMs, Config.MinPollingIntervalMs, Config.MaxPollingIntervalMs);
         tlp.Controls.Add(_interval, 1, 2);
         tlp.Controls.Add(new Label { Text = "ms", AutoSize = true, Anchor = AnchorStyles.Left, Margin = new Padding(4, 5, 0, 0) }, 2, 2);
 
-        Label hint = Hint("작을수록 빨리 반응합니다. 최소 500ms, 보통 1500ms.");
+        Label hint = Hint($"작을수록 빨리 반응합니다. 최소 {Config.MinPollingIntervalMs}ms, 보통 {Config.DefaultPollingIntervalMs}ms.");
         tlp.Controls.Add(hint, 0, 3);
         tlp.SetColumnSpan(hint, 3);
 
@@ -221,7 +250,14 @@ internal sealed class SettingsForm : Form
 
     private FlowLayoutPanel BuildButtons()
     {
-        var flow = new FlowLayoutPanel { Dock = DockStyle.Fill, FlowDirection = FlowDirection.RightToLeft, Margin = new Padding(0, 2, 0, 0) };
+        var flow = new FlowLayoutPanel
+        {
+            Dock = DockStyle.Top,
+            AutoSize = true,
+            AutoSizeMode = AutoSizeMode.GrowAndShrink,
+            FlowDirection = FlowDirection.RightToLeft,
+            Margin = new Padding(0, 4, 0, 0),
+        };
 
         var save = new Button { Text = "저장(&S)", DialogResult = DialogResult.OK, Size = new Size(84, 28) };
         save.Click += OnSave;
@@ -235,11 +271,33 @@ internal sealed class SettingsForm : Form
         return flow;
     }
 
+    // 그룹박스: 콘텐츠에 맞춰 세로로 자라되 폭은 부모 열을 채운다(고정 픽셀 높이 제거).
+    private static GroupBox GroupBoxShell(string text, Padding padding) => new()
+    {
+        Text = text,
+        Dock = DockStyle.Fill,
+        AutoSize = true,
+        AutoSizeMode = AutoSizeMode.GrowAndShrink,
+        Margin = new Padding(0, 0, 0, 8),
+        Padding = padding,
+    };
+
+    // 그룹 내부 표: 폭은 부모를 채우고(Dock.Top) 높이는 행 내용에 맞춘다(AutoSize).
+    private static TableLayoutPanel InnerPanel(int columns, int rows) => new()
+    {
+        Dock = DockStyle.Top,
+        AutoSize = true,
+        AutoSizeMode = AutoSizeMode.GrowAndShrink,
+        ColumnCount = columns,
+        RowCount = rows,
+    };
+
     private static Label Hint(string text) => new()
     {
         Text = text,
-        AutoSize = false,
-        Dock = DockStyle.Fill, // 셀 폭에 맞춰 줄바꿈 → 오른쪽 잘림 방지
+        AutoSize = true,
+        MaximumSize = new Size(GroupHintWidth, 0), // 폭에서 줄바꿈, 높이는 자동 → 잘림 방지
+        Margin = new Padding(3, 2, 3, 2),
         ForeColor = SystemColors.GrayText, // OS 힌트 색(테마 아님)
     };
 
@@ -324,7 +382,18 @@ internal sealed class SettingsForm : Form
             // 열거 실패 시 기본 장치 옵션만 노출
         }
 
-        _device.SelectedIndex = FindDeviceIndex(currentGuid);
+        int index = FindDeviceIndex(currentGuid);
+        if (index == 0 && currentGuid is not null)
+        {
+            // 설정된 장치가 지금 비활성/분리됨 → 항목으로 노출해 저장 시 '기본 장치'로 덮어쓰는 것을 막는다.
+            string norm = MMDevicePaths.NormalizeGuid(currentGuid);
+            string shortId = norm.Trim('{', '}');
+            if (shortId.Length > 8)
+                shortId = shortId[..8];
+            _device.Items.Add(new DeviceItem($"(설정된 장치 · 현재 비활성) · {shortId}", norm));
+            index = _device.Items.Count - 1;
+        }
+        _device.SelectedIndex = index;
     }
 
     private int FindDeviceIndex(string? currentGuid)

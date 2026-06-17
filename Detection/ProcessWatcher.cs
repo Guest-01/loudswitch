@@ -12,6 +12,7 @@ internal sealed class ProcessWatcher : IDisposable
 {
     private readonly string _processName;   // 확장자 없는 이름 (예: "notepad")
     private readonly int _intervalMs;
+    private readonly bool _syncInitialState; // 첫 틱에 '부재'여도 Stopped 발생(상태 강제 동기화)
     private readonly System.Threading.Timer _timer;
 
     private bool? _present;                  // null = 첫 틱 전(베이스라인 미정)
@@ -23,10 +24,17 @@ internal sealed class ProcessWatcher : IDisposable
     /// <summary>종료 감지(인스턴스가 0이 됨).</summary>
     public event Action? Stopped;
 
-    public ProcessWatcher(string processName, int intervalMs = 1500)
+    /// <param name="syncInitialState">
+    /// true면 첫 틱에서 프로세스가 <b>떠 있지 않아도</b> <see cref="Stopped"/>를 한 번 발생시켜
+    /// 외부 상태를 "프로세스 없음=OFF"로 강제 동기화한다(크래시 후 잔존 ON 정리). 떠 있으면
+    /// (이 값과 무관하게) <see cref="Started"/>가 발생한다. 순수 로그(watch)는 false로 둔다.
+    /// </param>
+    public ProcessWatcher(string processName, int intervalMs = Config.DefaultPollingIntervalMs,
+        bool syncInitialState = false)
     {
         _processName = StripExe(processName);
         _intervalMs = intervalMs;
+        _syncInitialState = syncInitialState;
         _timer = new System.Threading.Timer(_ => Poll(), null, Timeout.Infinite, Timeout.Infinite);
     }
 
@@ -46,10 +54,12 @@ internal sealed class ProcessWatcher : IDisposable
 
             if (_present is null)
             {
-                // 첫 틱: 베이스라인 설정. 시작 시 이미 떠 있으면 Started 한 번 발생(상태 동기화용).
+                // 첫 틱: 베이스라인 설정 + 상태 동기화. 떠 있으면 Started, (옵션 시) 없으면 Stopped.
                 _present = present;
                 if (present)
                     Started?.Invoke(count);
+                else if (_syncInitialState)
+                    Stopped?.Invoke();
                 return;
             }
 

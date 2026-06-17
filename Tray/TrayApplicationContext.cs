@@ -86,7 +86,12 @@ internal sealed class TrayApplicationContext : ApplicationContext
 
     private void StartWatcher()
     {
-        _watcher = new ProcessWatcher(_processName, _config.PollingIntervalMs);
+        if (string.IsNullOrWhiteSpace(_processName))
+            return; // 대상 프로그램 미설정 → 감시/토글 안 함
+
+        // syncInitialState=true: 시작 시 대상이 떠 있지 않으면 OFF로 동기화한다.
+        // (크래시 등으로 ON이 남아 있어도 다음 실행에서 정리 — level-trigger 일관성)
+        _watcher = new ProcessWatcher(_processName, _config.PollingIntervalMs, syncInitialState: true);
         // 콜백은 스레드풀(MTA) 스레드 — UI는 건드리지 않고 토글만 수행(슬라이스 4에서 검증).
         _watcher.Started += _ => ApplyIfPossible(true);
         _watcher.Stopped += () => ApplyIfPossible(false);
@@ -168,7 +173,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
                 _ => "미지원",
             };
         }
-        _statusItem.Text = $"대상: {_processName} · Loudness {loud} · 감시 {(_enabled ? "ON" : "OFF")}";
+        string target = string.IsNullOrWhiteSpace(_processName) ? "(미설정)" : _processName;
+        _statusItem.Text = $"대상: {target} · Loudness {loud} · 감시 {(_enabled ? "ON" : "OFF")}";
     }
 
     private void UpdateTooltip() =>
@@ -180,10 +186,8 @@ internal sealed class TrayApplicationContext : ApplicationContext
         _watcher = null;
         if (_config.RestoreOffOnDisable)
             ApplyIfPossible(false); // 종료 시 OFF 복원(설정에 따라)
-        _icon.Visible = false;
-        _icon.Icon?.Dispose();
-        _icon.Dispose();
-        ExitThread();
+        _icon.Visible = false;      // 트레이에서 즉시 제거
+        ExitThread();               // Application.Run 종료 → 최종 정리는 Dispose에서 단일 수행
     }
 
     protected override void Dispose(bool disposing)
@@ -192,6 +196,7 @@ internal sealed class TrayApplicationContext : ApplicationContext
         {
             _defaultDeviceTimer.Dispose();
             _watcher?.Dispose();
+            _icon.Icon?.Dispose(); // 코드로 생성한 Icon 핸들 해제
             _icon.Dispose();
         }
         base.Dispose(disposing);

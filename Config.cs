@@ -9,17 +9,22 @@ namespace Loudswitch;
 /// </summary>
 internal sealed class Config
 {
-    /// <summary>감시할 프로세스 이름(확장자 무관, 예: "notepad").</summary>
-    public string ProcessName { get; set; } = "notepad";
+    /// <summary>폴링 간격(ms)의 허용 범위/기본값 — 앱 전역 단일 출처.</summary>
+    public const int MinPollingIntervalMs = 500;
+    public const int MaxPollingIntervalMs = 60000;
+    public const int DefaultPollingIntervalMs = 1500;
 
     /// <summary>
-    /// 대상 엔드포인트 장치 GUID. <c>null</c>이면 기본 출력 장치.
-    /// (개발 기본값은 이 PC의 테스트베드 — 실사용 시 이 파일을 편집)
+    /// 감시할 프로세스 이름(확장자 무관, 예: "notepad"). 빈 문자열 = 아직 미설정
+    /// (첫 실행 기본값). 미설정 상태에서는 감시/토글을 하지 않는다.
     /// </summary>
-    public string? DeviceGuid { get; set; } = "{3ecd2d07-4d4f-480e-9553-b03a2947a222}";
+    public string ProcessName { get; set; } = "";
 
-    /// <summary>프로세스 폴링 간격(ms). 최소 200.</summary>
-    public int PollingIntervalMs { get; set; } = 1500;
+    /// <summary>대상 엔드포인트 장치 GUID. <c>null</c>이면 기본 출력 장치(권장 기본값).</summary>
+    public string? DeviceGuid { get; set; }
+
+    /// <summary>프로세스 폴링 간격(ms). 로드 시 [Min, Max]로 클램프된다.</summary>
+    public int PollingIntervalMs { get; set; } = DefaultPollingIntervalMs;
 
     /// <summary>비활성화/종료 시 Loudness를 OFF로 복원할지.</summary>
     public bool RestoreOffOnDisable { get; set; } = true;
@@ -40,8 +45,13 @@ internal sealed class Config
             if (File.Exists(FilePath))
             {
                 Config? cfg = JsonSerializer.Deserialize<Config>(File.ReadAllText(FilePath));
-                if (cfg is not null && !string.IsNullOrWhiteSpace(cfg.ProcessName))
+                if (cfg is not null)
+                {
+                    // 미설정(빈 ProcessName)도 유효한 상태다 — 손상 판정은 역직렬화 실패만.
+                    cfg.PollingIntervalMs = Math.Clamp(
+                        cfg.PollingIntervalMs, MinPollingIntervalMs, MaxPollingIntervalMs);
                     return cfg;
+                }
             }
         }
         catch

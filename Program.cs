@@ -177,8 +177,8 @@ internal static class Program
             return Usage();
 
         string name = args[1];
-        int interval = 1500;
-        if (args.Length >= 3 && int.TryParse(args[2], out int n) && n >= 200)
+        int interval = Config.DefaultPollingIntervalMs;
+        if (args.Length >= 3 && int.TryParse(args[2], out int n) && n >= Config.MinPollingIntervalMs)
             interval = n;
 
         using var watcher = new ProcessWatcher(name, interval);
@@ -274,6 +274,11 @@ internal static class Program
 
     private static int RunTray()
     {
+        // DPI/렌더링 설정은 어떤 창(MessageBox 포함)보다 먼저 적용해야 한다.
+        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
+        Application.EnableVisualStyles();
+        Application.SetCompatibleTextRenderingDefault(false);
+
         // 단일 인스턴스: 이미 실행 중이면 알리고 종료. (Mutex는 프로세스 생명주기 동안 보관)
         _singleInstanceMutex = new Mutex(initiallyOwned: true, @"Local\Loudswitch.SingleInstance", out bool createdNew);
         if (!createdNew)
@@ -288,12 +293,10 @@ internal static class Program
         if (created)
         {
             MessageBox.Show(
-                $"설정 파일을 생성했습니다:\n{Config.FilePath}\n\n트레이 아이콘 우클릭 → '설정...'에서 대상 프로세스·장치를 바꿀 수 있습니다.",
+                $"설정 파일을 생성했습니다:\n{Config.FilePath}\n\n트레이 아이콘 우클릭 → '설정...'에서 적용할 프로그램·장치를 지정하세요.",
                 "Loudswitch", MessageBoxButtons.OK, MessageBoxIcon.Information);
         }
 
-        Application.EnableVisualStyles();
-        Application.SetCompatibleTextRenderingDefault(false);
         Application.Run(new TrayApplicationContext(config));
         return 0;
     }
