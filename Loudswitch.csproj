@@ -10,6 +10,8 @@
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
+    <!-- LibraryImport/소스 생성 COM(ComWrappers) 스텁이 unsafe 코드를 생성하므로 필요. -->
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
 
     <!-- Core Audio COM(IPolicyConfig 등)은 32/64비트 프로세스 비트수에 민감하므로 x64로 고정한다. -->
     <Platforms>x64</Platforms>
