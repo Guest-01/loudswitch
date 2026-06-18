@@ -1,4 +1,3 @@
-using System.Windows.Forms;
 using Microsoft.Win32;
 
 namespace Loudswitch.Tray;
@@ -27,5 +26,5 @@ internal static class Autostart
     }
 
     private static string ExecutablePath() =>
-        Environment.ProcessPath ?? Application.ExecutablePath;
+        Environment.ProcessPath ?? throw new InvalidOperationException("실행 파일 경로를 확인할 수 없습니다.");
 }

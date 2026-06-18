@@ -1,6 +1,5 @@
 using System.Runtime.InteropServices;
 using System.Text;
-using System.Windows.Forms;
 using Loudswitch.Audio;
 using Loudswitch.Detection;
 using Loudswitch.Interop;
@@ -177,8 +176,8 @@ internal static class Program
             return Usage();
 
         string name = args[1];
-        int interval = Config.DefaultPollingIntervalMs;
-        if (args.Length >= 3 && int.TryParse(args[2], out int n) && n >= Config.MinPollingIntervalMs)
+        int interval = Config.PollingIntervalMs;
+        if (args.Length >= 3 && int.TryParse(args[2], out int n) && n >= 100)
             interval = n;
 
         using var watcher = new ProcessWatcher(name, interval);
@@ -274,17 +273,12 @@ internal static class Program
 
     private static int RunTray()
     {
-        // DPI/렌더링 설정은 어떤 창(MessageBox 포함)보다 먼저 적용해야 한다.
-        Application.SetHighDpiMode(HighDpiMode.PerMonitorV2);
-        Application.EnableVisualStyles();
-        Application.SetCompatibleTextRenderingDefault(false);
-
         // 단일 인스턴스: 이미 실행 중이면 알리고 종료. (Mutex는 프로세스 생명주기 동안 보관)
         _singleInstanceMutex = new Mutex(initiallyOwned: true, @"Local\Loudswitch.SingleInstance", out bool createdNew);
         if (!createdNew)
         {
-            MessageBox.Show("Loudswitch가 이미 실행 중입니다. 시스템 트레이를 확인하세요.",
-                "Loudswitch", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            Win32.MessageBoxW(0, "Loudswitch가 이미 실행 중입니다. 시스템 트레이를 확인하세요.",
+                "Loudswitch", 0x40 /* MB_ICONINFORMATION */);
             return 0;
         }
 
@@ -292,12 +286,13 @@ internal static class Program
 
         if (created)
         {
-            MessageBox.Show(
-                $"설정 파일을 생성했습니다:\n{Config.FilePath}\n\n트레이 아이콘 우클릭 → '설정...'에서 적용할 프로그램·장치를 지정하세요.",
-                "Loudswitch", MessageBoxButtons.OK, MessageBoxIcon.Information);
+            Win32.MessageBoxW(0,
+                $"설정 파일을 생성했습니다:\n{Config.FilePath}\n\n트레이 아이콘을 클릭해 적용할 프로그램·장치를 지정하세요.",
+                "Loudswitch", 0x40);
         }
 
-        Application.Run(new TrayApplicationContext(config));
+        using var app = new TrayApplicationContext(config);
+        app.Run();
         return 0;
     }
 

@@ -29,7 +29,7 @@ internal sealed class ProcessWatcher : IDisposable
     /// 외부 상태를 "프로세스 없음=OFF"로 강제 동기화한다(크래시 후 잔존 ON 정리). 떠 있으면
     /// (이 값과 무관하게) <see cref="Started"/>가 발생한다. 순수 로그(watch)는 false로 둔다.
     /// </param>
-    public ProcessWatcher(string processName, int intervalMs = Config.DefaultPollingIntervalMs,
+    public ProcessWatcher(string processName, int intervalMs = Config.PollingIntervalMs,
         bool syncInitialState = false)
     {
         _processName = StripExe(processName);

@@ -3,10 +3,11 @@
   <PropertyGroup>
     <!-- 트레이 앱: 콘솔 창이 뜨지 않도록 WinExe. dev 서브커맨드는 AttachConsole(부모)로 출력 유지. -->
     <OutputType>WinExe</OutputType>
-    <UseWindowsForms>true</UseWindowsForms>
     <TargetFramework>net10.0-windows</TargetFramework>
     <RootNamespace>Loudswitch</RootNamespace>
     <AssemblyName>Loudswitch</AssemblyName>
+    <!-- exe 파일 아이콘(탐색기/작업표시줄/알림 브랜딩에 사용). -->
+    <ApplicationIcon>Tray\assets\active.ico</ApplicationIcon>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>
@@ -18,13 +19,18 @@
     <PlatformTarget>x64</PlatformTarget>
     <RuntimeIdentifier>win-x64</RuntimeIdentifier>
 
-    <!-- 게시: 단일 exe. 기본은 프레임워크 종속(.NET 10 Desktop 런타임 필요)이지만,
-         일반 배포는 Properties\PublishProfiles\SelfContained.pubxml(독립 실행)을 쓴다.
-         프로필/CLI가 SelfContained를 지정하면 아래 기본값이 덮어쓰지 않도록 조건부로 둔다. -->
-    <PublishSingleFile>true</PublishSingleFile>
-    <SelfContained Condition="'$(SelfContained)' == ''">false</SelfContained>
+    <!-- 게시: NativeAOT 단일 네이티브 exe(.NET 런타임 불필요).
+         dotnet publish -c Release -r win-x64
+         → bin\Release\net10.0-windows\win-x64\publish\Loudswitch.exe -->
+    <PublishAot>true</PublishAot>
 
     <InvariantGlobalization>true</InvariantGlobalization>
   </PropertyGroup>
+
+  <!-- 트레이 아이콘: 런타임 System.Drawing 생성 대신 임베드 .ico를 Win32로 로드(AOT 안전). -->
+  <ItemGroup>
+    <EmbeddedResource Include="Tray\assets\active.ico" LogicalName="active.ico" />
+    <EmbeddedResource Include="Tray\assets\inactive.ico" LogicalName="inactive.ico" />
+  </ItemGroup>
 
 </Project>

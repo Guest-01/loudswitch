@@ -1,60 +1,48 @@
-using System.Drawing;
-using System.Drawing.Drawing2D;
-using System.Drawing.Text;
+using System.Reflection;
 using System.Runtime.InteropServices;
+using static Loudswitch.Tray.Win32;
 
 namespace Loudswitch.Tray;
 
 /// <summary>
-/// 트레이 아이콘을 코드로 생성한다(에셋 없이). 둥근 사각 배지 + 흰 "L" — 활성=파랑, 비활성=회색.
+/// 트레이 아이콘(HICON)을 임베드된 .ico에서 만든다. 활성=파랑, 비활성=회색의 둥근 "L" 배지.
+/// System.Drawing 의존 없이 Win32 <c>CreateIconFromResourceEx</c>로 로드해 NativeAOT에서도 안전하다.
+/// 반환된 HICON은 사용 측이 <see cref="Win32.DestroyIcon"/>로 해제한다.
 /// </summary>
 internal static class TrayIcons
 {
-    public static Icon Create(bool active)
+    public static nint Create(bool active) => LoadIcon(active ? "active.ico" : "inactive.ico");
+
+    private static nint LoadIcon(string resourceName)
     {
-        using var bmp = new Bitmap(32, 32);
-        using (Graphics g = Graphics.FromImage(bmp))
-        {
-            g.SmoothingMode = SmoothingMode.AntiAlias;
-            g.TextRenderingHint = TextRenderingHint.AntiAlias;
-            g.Clear(Color.Transparent);
+        byte[] ico = ReadEmbedded(resourceName);
 
-            Color bg = active ? Color.FromArgb(0, 120, 215) : Color.FromArgb(150, 150, 150);
-            var rect = new Rectangle(1, 1, 30, 30);
+        // 단일 이미지 .ico: 첫 ICONDIRENTRY(오프셋 6)에서 이미지 블록의 크기/오프셋을 읽는다.
+        // ICONDIRENTRY: ... +8=bytesInRes(DWORD), +12=imageOffset(DWORD)
+        int bytesInRes = BitConverter.ToInt32(ico, 6 + 8);
+        int imageOffset = BitConverter.ToInt32(ico, 6 + 12);
 
-            using (GraphicsPath path = RoundedRect(rect, 6))
-            using (var brush = new SolidBrush(bg))
-                g.FillPath(brush, path);
-
-            using var font = new Font("Segoe UI", 19f, FontStyle.Bold, GraphicsUnit.Pixel);
-            using var fmt = new StringFormat { Alignment = StringAlignment.Center, LineAlignment = StringAlignment.Center };
-            g.DrawString("L", font, Brushes.White, rect, fmt);
-        }
-
-        IntPtr handle = bmp.GetHicon();
+        GCHandle pin = GCHandle.Alloc(ico, GCHandleType.Pinned);
         try
         {
-            using var temp = Icon.FromHandle(handle);
-            return (Icon)temp.Clone(); // HICON과 독립된 복제본 → 원본 핸들 해제 가능
+            nint imagePtr = pin.AddrOfPinnedObject() + imageOffset;
+            // dwVer=0x00030000 (필수). cx/cy=0 → 실제 크기 사용.
+            return CreateIconFromResourceEx(imagePtr, (uint)bytesInRes, fIcon: true, 0x00030000, 0, 0, 0);
         }
         finally
         {
-            DestroyIcon(handle);
+            pin.Free();
         }
     }
 
-    private static GraphicsPath RoundedRect(Rectangle r, int radius)
+    private static byte[] ReadEmbedded(string logicalName)
     {
-        int d = radius * 2;
-        var path = new GraphicsPath();
-        path.AddArc(r.X, r.Y, d, d, 180, 90);
-        path.AddArc(r.Right - d, r.Y, d, d, 270, 90);
-        path.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
-        path.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
-        path.CloseFigure();
-        return path;
-    }
+        using Stream? s = Assembly.GetExecutingAssembly().GetManifestResourceStream(logicalName);
+        if (s is null)
+            throw new InvalidOperationException($"임베드 리소스를 찾지 못했습니다: {logicalName}");
 
-    [DllImport("user32.dll", SetLastError = true)]
-    private static extern bool DestroyIcon(IntPtr handle);
+        using var ms = new MemoryStream();
+        s.CopyTo(ms);
+        return ms.ToArray();
+    }
 }
