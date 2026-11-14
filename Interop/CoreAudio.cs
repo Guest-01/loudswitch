@@ -65,6 +65,13 @@ internal static class CoreAudio
 
         return device.GetId(out string id) == 0 ? id : null;
     }
+
+    /// <summary>엔드포인트 ID로 장치를 연다. 없으면 <c>null</c>.</summary>
+    public static IMMDevice? GetDevice(string endpointId)
+    {
+        IMMDeviceEnumerator enumerator = Com.Create<IMMDeviceEnumerator>(in CLSID_MMDeviceEnumerator, in IID_IMMDeviceEnumerator);
+        return enumerator.GetDevice(endpointId, out IMMDevice device) == 0 ? device : null;
+    }
 }
 
 [GeneratedComInterface]
@@ -73,6 +80,7 @@ internal partial interface IMMDeviceEnumerator
 {
     [PreserveSig] int EnumAudioEndpoints(CoreAudio.EDataFlow dataFlow, int stateMask, out IMMDeviceCollection devices);
     [PreserveSig] int GetDefaultAudioEndpoint(CoreAudio.EDataFlow dataFlow, CoreAudio.ERole role, out IMMDevice device);
+    [PreserveSig] int GetDevice([MarshalAs(UnmanagedType.LPWStr)] string id, out IMMDevice device);
 }
 
 [GeneratedComInterface]
@@ -87,7 +95,7 @@ internal partial interface IMMDeviceCollection
 [Guid("D666063F-1587-4E43-81F1-B948E807363F")]
 internal partial interface IMMDevice
 {
-    [PreserveSig] int Activate(in Guid iid, int clsCtx, nint activationParams, out nint iface); // 미사용(슬롯 유지)
+    [PreserveSig] int Activate(in Guid iid, int clsCtx, nint activationParams, out nint iface); // EffectsPropertyStore가 사용
     [PreserveSig] int OpenPropertyStore(int access, out nint properties);                        // 미사용(슬롯 유지)
     [PreserveSig] int GetId(out string id);
 }

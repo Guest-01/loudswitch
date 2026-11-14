@@ -90,7 +90,7 @@ internal static class Program
     private static void PrintSummary(int total, int supported)
     {
         Console.WriteLine(new string('-', 60));
-        Console.WriteLine($"요약: 활성 출력 {total}개 중 Loudness EQ 키 노출 {supported}개.");
+        Console.WriteLine($"요약: 활성 출력 {total}개 중 평준화 지원 {supported}개.");
     }
 
     // ---------------------------------------------------------------- 슬라이스 2: 쓰기/토글
@@ -128,42 +128,43 @@ internal static class Program
     }
 
     /// <summary>
-    /// 쓰기 전/후 레지스트리 값을 읽어 IPolicyConfig 쓰기 결과를 검증·보고한다.
-    /// (소리/GUI 확인은 descope — API 쓰기 경로·값 형식·HRESULT만 증명)
+    /// 앱과 같은 경로(<see cref="LoudnessController"/>)로 쓰고, 쓰기 전/후 상태를 다시 읽어 검증·보고한다.
+    /// 미지원 장치는 트레이와 똑같이 건드리지 않는다.
     /// </summary>
     private static int ApplyAndReport(string endpointId, bool on)
     {
         LoudnessEqualizationSetting.Report before = LoudnessEqualizationSetting.Read(endpointId);
-        int hr = PolicyConfig.SetLoudness(endpointId, on);
+        LoudnessController.ApplyResult result = LoudnessController.Apply(endpointId, on, out int hr);
         LoudnessEqualizationSetting.Report after = LoudnessEqualizationSetting.Read(endpointId);
 
         Console.WriteLine($"대상  : {endpointId}");
         Console.WriteLine($"목표  : {(on ? "ON" : "OFF")}");
-        Console.WriteLine($"HRESULT: 0x{hr:X8} {(hr == 0 ? "(S_OK)" : "(실패)")}");
+        Console.WriteLine($"결과  : {result}{(result == LoudnessController.ApplyResult.Failed ? $" (HRESULT 0x{hr:X8})" : "")}");
         Console.WriteLine($"before: {DescribeState(before)}");
         Console.WriteLine($"after : {DescribeState(after)}");
         Console.WriteLine();
 
-        if (hr != 0)
+        switch (result)
         {
-            Console.WriteLine("→ SetPropertyValue 실패. 이 엔드포인트가 IPolicyConfig 쓰기를 거부합니다.");
-            return 1;
+            case LoudnessController.ApplyResult.SkippedUnsupported:
+                Console.WriteLine("→ 미지원 장치라 건드리지 않았습니다.");
+                return 1;
+            case LoudnessController.ApplyResult.Failed:
+                Console.WriteLine($"→ 쓰기 실패 ({before.Backend} 경로).");
+                return 1;
+            case LoudnessController.ApplyResult.Unchanged:
+                Console.WriteLine("→ 이미 목표 상태라 쓰지 않았습니다.");
+                return 0;
         }
 
-        bool changedAsExpected = on
-            ? after.State == LoudnessEqualizationSetting.State.On
-            : after.State == LoudnessEqualizationSetting.State.NotOn;
-
+        bool changedAsExpected = after.State == (on ? LoudnessEqualizationSetting.State.On : LoudnessEqualizationSetting.State.Off);
         if (!changedAsExpected)
         {
-            Console.WriteLine("→ HRESULT는 S_OK인데 레지스트리가 기대대로 안 바뀌었습니다 (중요한 발견).");
-            Console.WriteLine("  잠시 후 `dotnet run`으로 다시 확인하거나, 이 엔드포인트가 키를 무시하는지 점검 필요.");
+            Console.WriteLine("→ 쓰기는 성공했는데 다시 읽은 상태가 기대와 다릅니다 (중요한 발견).");
             return 1;
         }
 
-        Console.WriteLine(on
-            ? "→ ON 성공. after가 알려진 ON 패턴과 일치하면 PROPVARIANT 구성이 네이티브와 동일합니다."
-            : "→ OFF 성공. 위 after의 raw 바이트가 '실제 OFF 직렬화 형식'입니다 (미해결 질문 해소).");
+        Console.WriteLine($"→ {(on ? "ON" : "OFF")} 성공 ({after.Backend} 경로).");
         return 0;
     }
 
@@ -225,7 +226,7 @@ internal static class Program
         Console.WriteLine($"대상 엔드포인트: {endpointId}");
         Console.WriteLine($"현재 Loudness : {DescribeState(initial)}");
         if (initial.State == LoudnessEqualizationSetting.State.Unsupported)
-            Console.WriteLine("주의: 이 장치는 Loudness EQ 미노출 → 토글은 skip되고 감지 로그만 출력됩니다.");
+            Console.WriteLine("주의: 이 장치는 평준화 미지원 → 토글은 skip되고 감지 로그만 출력됩니다.");
         Console.WriteLine($"'{name}' 감시 시작. 시작=ON / 종료=OFF. Ctrl+C로 종료.\n");
 
         using var watcher = new ProcessWatcher(name);
@@ -255,13 +256,16 @@ internal static class Program
 
     private static void ApplyAuto(string endpointId, bool on)
     {
-        switch (LoudnessController.Apply(endpointId, on))
+        switch (LoudnessController.Apply(endpointId, on, out int hr))
         {
             case LoudnessController.ApplyResult.SkippedUnsupported:
-                Log("  → 미지원 (키 없음) → 토글 skip (force-create 안 함)");
+                Log("  → 미지원 장치 → 토글 skip");
                 break;
             case LoudnessController.ApplyResult.Failed:
-                Log("  → SetPropertyValue 실패 (S_OK 아님)");
+                Log($"  → 쓰기 실패 (HRESULT 0x{hr:X8})");
+                break;
+            case LoudnessController.ApplyResult.Unchanged:
+                Log("  → 이미 목표 상태 (쓰지 않음)");
                 break;
             case LoudnessController.ApplyResult.Set:
                 Log($"  → OK, 상태: {DescribeState(LoudnessEqualizationSetting.Read(endpointId))}");
@@ -300,9 +304,9 @@ internal static class Program
 
     private static string DescribeState(LoudnessEqualizationSetting.Report r) => r.State switch
     {
-        LoudnessEqualizationSetting.State.Unsupported => "[미지원] (FxProperties 또는 키 없음)",
-        LoudnessEqualizationSetting.State.On => $"[켜짐] {Hex(r.RawValue!)}",
-        LoudnessEqualizationSetting.State.NotOn => $"[ON 아님] {Hex(r.RawValue!)}",
+        LoudnessEqualizationSetting.State.Unsupported => $"[미지원] ({r.Detail})",
+        LoudnessEqualizationSetting.State.On => $"[켜짐] ({r.Detail})",
+        LoudnessEqualizationSetting.State.Off => $"[꺼짐] ({r.Detail})",
         _ => "?",
     };
 
@@ -324,9 +328,6 @@ internal static class Program
         Console.WriteLine("  dotnet run -- auto <name> [guid]   프로세스 감지 → Loudness 토글 (guid 없으면 기본 장치)");
         return 2;
     }
-
-    private static string Hex(byte[] bytes) =>
-        "hex:" + string.Join(",", bytes.Select(b => b.ToString("x2")));
 
     private static void TrySetUtf8Console()
     {

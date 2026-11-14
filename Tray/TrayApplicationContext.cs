@@ -265,12 +265,12 @@ internal sealed class TrayApplicationContext : IDisposable
         if (_endpointId is null)
             return;
 
-        bool wasOn = LoudnessEqualizationSetting.Read(_endpointId).State == LoudnessEqualizationSetting.State.On;
-        if (LoudnessController.Apply(_endpointId, on) != LoudnessController.ApplyResult.Set)
+        LoudnessController.ApplyResult result = LoudnessController.Apply(_endpointId, on);
+        if (result is not (LoudnessController.ApplyResult.Set or LoudnessController.ApplyResult.Unchanged))
             return;
 
         UpdateIcon();
-        if (notify && wasOn != on && _config.NotifyOnToggle)
+        if (notify && result == LoudnessController.ApplyResult.Set && _config.NotifyOnToggle)
             _shell.Notify("Loudswitch", on ? "음량 평준화를 켰습니다." : "음량 평준화를 껐습니다.");
     }
 
@@ -297,7 +297,7 @@ internal sealed class TrayApplicationContext : IDisposable
             : LoudnessEqualizationSetting.Read(_endpointId).State switch
             {
                 LoudnessEqualizationSetting.State.On => "평준화 켜짐",
-                LoudnessEqualizationSetting.State.NotOn => "평준화 꺼짐",
+                LoudnessEqualizationSetting.State.Off => "평준화 꺼짐",
                 _ => "미지원 장치",
             };
         string target = string.IsNullOrWhiteSpace(_processName) ? "(미설정)" : _processName;

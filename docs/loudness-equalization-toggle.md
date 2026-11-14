@@ -93,11 +93,38 @@ IPolicyConfig::SetPropertyValue(deviceId, /*bFxStore=*/TRUE, key, &pv); // 쓰�
 - `bFxStore = TRUE` → FxProperties 저장소에 직접 쓰기 = GUI와 동일 경로.
 - `key`에 Loudness EQ 키(`{fc52a749-...},3`)를 지정.
 
-### 정식 대안 (참고)
+### 정식 API — 기본 경로로 채택 (2026-11-14 재설계)
 
-Win11의 `IAudioSystemEffectsPropertyStore`가 문서화된 정식 API지만,
-**패키지 앱 + `audioDeviceConfiguration` restricted capability**를 요구해 데스크톱 트레이 앱에는 과함.
-→ 현 단계에서는 IPolicyConfig 채택.
+> 2026-06-15 판단(아래 취소선)은 문서 문구만 보고 시험 없이 내린 것이었고, 실측으로 뒤집혔다.
+> ~~Win11의 `IAudioSystemEffectsPropertyStore`는 패키지 앱 + restricted capability를 요구해 트레이 앱에는 과함 → IPolicyConfig 채택.~~
+
+**발견 경위**: RØDE NT-USB Mini(헤드폰)에서 사용자가 설정 화면으로 평준화를 켜자, 값이 FxProperties **바로 아래가 아니라**
+`FxProperties\{b13412ee-07af-4c57-b08b-e327f8db085b}\User`에 기록됐다. 앱은 바로 아래만 읽어 이 장치를 "미지원"으로 오판했다.
+
+**공식 구조** (Microsoft Learn "Windows 11 APIs for Audio Processing Objects" — FxProperty Store Structure):
+- 효과 설정은 APO가 정한 **컨텍스트 GUID**마다 `Default`(드라이버 INF가 채움) / `User`(사용자 설정, 업그레이드 시 보존) / `Volatile`(재부팅 시 소멸) 세 층.
+- 옛 방식(FxProperties 바로 아래)은 이 구조 이전 형식이며, OS 업그레이드 때 새 버전으로 옮겨지지 않는다.
+- 접근 API: `IMMDevice::Activate(IID_IAudioSystemEffectsPropertyStore, CLSCTX_INPROC_SERVER, VT_CLSID(컨텍스트))`
+  → `OpenUserPropertyStore(STGM_READ | STGM_READWRITE)` → 표준 `IPropertyStore`. IID `302AE7F9-D7E0-43E4-971B-1F8293613D2A`.
+
+**실측 (이 PC, Windows 11 빌드 26200, 일반 권한·패키징 없음)**:
+- 읽기 ✅, User 층 쓰기(`SetValue`+`Commit`) ✅, 설정 화면에 즉시 반영 ✅. 바깥 FxProperties는 변하지 않음.
+- 문서 간 표현이 엇갈린다: 한 페이지는 "비관리자는 읽기 전용", 다른 페이지는 "비관리자 데스크톱 앱도 읽기·쓰기 가능".
+  실제 동작은 후자. 레지스트리 ACL도 `BUILTIN\Users`에 User 키 `SetValue`를 준다.
+- 출력 장치 13개 모두 Microsoft 기본 효과 모듈(WM LFX/GFX APO, `WMALFXGFXDSP.dll`)과 같은 컨텍스트 GUID를 가짐.
+
+**앱의 판정·쓰기 순서** (`LoudnessEqualizationSetting.Read` → `LoudnessController.Apply`):
+1. 공식 API(User → Default 층)에 값이 있으면 → 그 값, 쓰기도 공식 API.
+2. 없고 옛 방식 위치에 값이 있으면 → 그 값, 쓰기는 IPolicyConfig(옛 드라이버·Windows 10·테스트베드).
+3. 둘 다 없지만 효과 체인(`PKEY_FX_*EffectClsid`)에 Microsoft 기본 모듈이 있으면 → "지원·꺼짐(기본값)".
+   공식 API가 열리면 공식으로, 아니면 옛 방식으로 쓴다.
+4. 그 외(제조사 전용 모듈) → 미지원, 건드리지 않음.
+
+**한계·위험**:
+- 문서상 권한 조건(`audioDeviceConfiguration`)이 나중에 강제되면 공식 경로가 막힐 수 있다 → 그때는 2·4번으로 떨어진다.
+- 컨텍스트 GUID를 얻는 공식 API가 없어 `{b13412ee-...}`를 상수로 둔다. **다른 PC에서 같은지 미확인.**
+- 옛 방식 경로(2번)는 이번 재설계 후 이 PC에서 재검증하지 못했다(해당 장치 없음).
+- 귀로 듣는 즉시 반영 여부는 여전히 미확인(설정 화면 반영까지만 확인).
 
 ---
 
@@ -187,6 +214,8 @@ Win11의 `IAudioSystemEffectsPropertyStore`가 문서화된 정식 API지만,
   **HRESULT S_OK, 관리자 권한 불필요**(§2 주장 검증), read-back 즉시 반영, ON/OFF 바이트 확정(§1).
 - ⏭ 다음: 슬라이스 3(WMI 프로세스 감지) → 4(통합) → 5(트레이 UI).
 - ⚠ 미검증(의도적 descope): "**귀에 들리는**" 즉시 APO 재로드. API 쓰기 경로 자체는 검증됨.
+- ✅ 슬라이스 3~7 및 NativeAOT·네이티브 트레이 전환 완료(커밋 이력 참고).
+- ✅ 2026-11-14: 공식 API(`IAudioSystemEffectsPropertyStore`)를 기본 경로로 재설계, 옛 방식은 예비 경로(§2 "정식 API").
 
 ---
 
@@ -195,8 +224,13 @@ Win11의 `IAudioSystemEffectsPropertyStore`가 문서화된 정식 API지만,
 - [x] ~~Loudness EQ **끄기** 값의 정확한 PROPVARIANT 형식?~~ ✅ **해소 (2026-06-16)**:
   `hex:0b,00,00,00,01,00,00,00,00,00,00,00` (VT_BOOL=FALSE). §1 "값 형식" 참고.
 - [ ] `{fc52a749-...},3` 키가 Realtek 외 드라이버(또는 MS 기본 HD Audio 드라이버)에서도 동일하게 동작하는가?
-- [ ] Win11 24H2+에서 FxProperties 쓰기가 새 설정 UI에 의해 덮어써지지 않고 영속되는가?
-- [ ] 다중 출력 장치 환경에서 "기본 장치 변경" 시 토글 대상 갱신 처리.
+- [x] ~~Win11 24H2+에서 FxProperties 쓰기가 새 설정 UI에 의해 덮어써지지 않고 영속되는가?~~ ✅ **해소 (2026-11-14)**:
+  새 구조에선 설정 UI가 FxProperties 바로 아래가 아니라 공식 저장소 User 층을 쓴다 → 앱도 같은 곳을 쓰도록 재설계.
+- [x] ~~다중 출력 장치 환경에서 "기본 장치 변경" 시 토글 대상 갱신 처리.~~ ✅ 트레이의 기본 장치 추적으로 구현됨.
+- [ ] Microsoft 기본 효과 모듈의 컨텍스트 GUID `{b13412ee-...}`가 다른 PC에서도 같은가?
+- [ ] 옛 방식 장치(공식 저장소 미사용 드라이버)에서 예비 경로가 여전히 동작하는가? (재설계 후 미검증)
+- [ ] 설정 화면이 열려 있는 동안 앱이 값을 바꾸면 설정 화면이 옛 값을 다시 써 버리는가?
+  (2026-11-14 23:01:56, 시험 복구 직후 원인 불명으로 헤드폰 값이 꺼짐으로 바뀐 기록이 있음)
 
 ---
 
@@ -214,6 +248,12 @@ Win11의 `IAudioSystemEffectsPropertyStore`가 문서화된 정식 API지만,
 - ❌ WMI `__InstanceCreationEvent WITHIN` 구독은 "이벤트 기반이라 0% CPU"다. (2026-06-16 기각 —
   내부적으로 전체 프로세스를 주기 폴링해 무겁고 edge 트리거. 진짜 push인 `Win32_ProcessStartTrace`는
   관리자 필요. → 무권한·경량·자가치유를 위해 **셀프 폴링** 채택. §4 참고.)
+- ❌ `IAudioSystemEffectsPropertyStore`는 패키지 앱 + restricted capability가 있어야 쓸 수 있다. (2026-11-14 기각 —
+  패키징·관리자 없는 일반 데스크톱 프로그램에서 읽기·쓰기 모두 동작. 단, 문서상 조건이라 나중에 강제될 위험은 남음.)
+- ❌ Loudness EQ 상태는 항상 `...\{GUID}\FxProperties` 바로 아래에 있다. (2026-11-14 기각 — Windows 11 새 구조에선
+  `FxProperties\{컨텍스트}\User`에 저장. 한 번도 바꾸지 않은 장치엔 값 자체가 없음.)
+- ❌ `StrategyBasedComWrappers.GetOrCreateObjectForComInstance`는 넘겨받은 참조의 소유권을 가져간다. (2026-11-14 기각 —
+  실측 참조 수 2→3, 래퍼가 자기 참조를 따로 추가. 호출자가 Release해야 함 → `Com.Wrap`에서 처리.)
 
 ---
 

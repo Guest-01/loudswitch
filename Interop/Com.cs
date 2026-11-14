@@ -37,7 +37,23 @@ internal static partial class Com
         if (hr != 0 || p == 0)
             throw new InvalidOperationException($"COM 개체 생성 실패 (CLSID {clsid:B}, HRESULT 0x{hr:X8}).");
 
-        // GetOrCreateObjectForComInstance가 p의 참조 소유권을 가져가므로 별도 Release 금지.
-        return (T)Wrappers.GetOrCreateObjectForComInstance(p, CreateObjectFlags.None);
+        return Wrap<T>(p);
+    }
+
+    /// <summary>
+    /// 네이티브가 넘겨준(이미 AddRef된) 인터페이스 포인터를 <typeparamref name="T"/>로 래핑하고,
+    /// 넘겨받은 참조는 해제한다. 래퍼(RCW)는 자기 참조를 따로 AddRef하므로 소유권이 넘어가지 않는다
+    /// (실측: 래핑 전 참조 2 → 래핑 후 3). 해제하지 않으면 호출마다 참조가 하나씩 샌다.
+    /// </summary>
+    public static T Wrap<T>(nint p) where T : class
+    {
+        try
+        {
+            return (T)Wrappers.GetOrCreateObjectForComInstance(p, CreateObjectFlags.None);
+        }
+        finally
+        {
+            Marshal.Release(p);
+        }
     }
 }

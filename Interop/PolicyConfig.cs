@@ -69,16 +69,19 @@ internal struct PropertyKey
 }
 
 /// <summary>
-/// VT_BOOL 전용 최소 PROPVARIANT. x64에서 PROPVARIANT는 24바이트이며
-/// vt는 오프셋 0, boolVal(VARIANT_BOOL)은 오프셋 8에 위치한다.
+/// 최소 PROPVARIANT. x64에서 PROPVARIANT는 24바이트이며 vt는 오프셋 0, 값(boolVal/포인터)은 오프셋 8에 있다.
+/// 이 앱은 VT_BOOL(평준화 값)과 VT_CLSID(공식 API 활성화 인자: GUID 포인터)만 다룬다.
 /// </summary>
 [StructLayout(LayoutKind.Explicit, Size = 24)]
 internal struct PropVariant
 {
     [FieldOffset(0)] public ushort Vt;
     [FieldOffset(8)] public short BoolVal;
+    [FieldOffset(8)] public nint Ptr;
 
-    private const ushort VT_BOOL = 11;
+    public const ushort VT_EMPTY = 0;
+    public const ushort VT_BOOL = 11;
+    public const ushort VT_CLSID = 72;
 
     // VARIANT_TRUE = -1(0xFFFF), VARIANT_FALSE = 0
     public static PropVariant Bool(bool value) =>
