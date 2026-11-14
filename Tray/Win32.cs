@@ -11,6 +11,7 @@ internal static unsafe partial class Win32
     public const uint WM_DESTROY = 0x0002;
     public const uint WM_TIMER = 0x0113;
     public const uint WM_APP_TRAY = 0x0400 + 1; // 트레이 콜백(WM_USER 영역)
+    public const uint WM_APP_INVOKE = 0x0400 + 2; // 다른 스레드가 Post한 작업 실행 요청
     public const uint WM_LBUTTONUP = 0x0202;
     public const uint WM_RBUTTONUP = 0x0205;
     public const uint WM_CONTEXTMENU = 0x007B;
@@ -71,6 +72,9 @@ internal static unsafe partial class Win32
 
     [LibraryImport("user32.dll")]
     public static partial void PostQuitMessage(int code);
+
+    [LibraryImport("user32.dll")]
+    public static partial int PostMessageW(nint hWnd, uint msg, nint wParam, nint lParam);
 
     [LibraryImport("user32.dll")]
     public static partial nuint SetTimer(nint hWnd, nuint id, uint elapseMs, nint func);

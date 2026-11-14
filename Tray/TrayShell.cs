@@ -1,3 +1,4 @@
+using System.Collections.Concurrent;
 using System.Runtime.InteropServices;
 using static Loudswitch.Tray.Win32;
 
@@ -18,6 +19,7 @@ internal sealed unsafe class TrayShell : IDisposable
     private readonly nint _hwnd;
     private readonly nint _activeIcon;   // HICON
     private readonly nint _inactiveIcon; // HICON
+    private readonly ConcurrentQueue<Action> _posted = new(); // 다른 스레드 → 메시지 루프 스레드 작업함
     private bool _active = true;
     private bool _disposed;
 
@@ -61,6 +63,35 @@ internal sealed unsafe class TrayShell : IDisposable
     }
 
     public void Quit() => PostQuitMessage(0);
+
+    /// <summary>
+    /// 어느 스레드에서든 호출 가능. <paramref name="action"/>을 메시지 루프 스레드에서 실행하도록 넘긴다.
+    /// 앱 상태는 메시지 루프 스레드만 만지게 해서(단일 스레드 모델) 잠금 없이 경합을 없앤다.
+    /// 종료 후 Post된 작업은 조용히 버려진다.
+    /// </summary>
+    public void Post(Action action)
+    {
+        if (_disposed)
+            return;
+        _posted.Enqueue(action);
+        PostMessageW(_hwnd, WM_APP_INVOKE, 0, 0);
+    }
+
+    private void RunPosted()
+    {
+        // 메시지 하나당 큐 전체를 비운다(PostMessage가 합쳐지거나 실패해도 다음 메시지에서 처리됨).
+        while (_posted.TryDequeue(out Action? action))
+        {
+            try
+            {
+                action();
+            }
+            catch
+            {
+                // 한 작업의 실패가 나머지 작업과 메시지 루프를 막지 않도록.
+            }
+        }
+    }
 
     public void StartDefaultDeviceTimer(uint intervalMs) => SetTimer(_hwnd, DefaultDeviceTimerId, intervalMs, 0);
 
@@ -180,6 +211,9 @@ internal sealed unsafe class TrayShell : IDisposable
                     return 0;
                 case WM_TIMER:
                     _instance?.TimerTick?.Invoke();
+                    return 0;
+                case WM_APP_INVOKE:
+                    _instance?.RunPosted();
                     return 0;
                 case WM_DESTROY:
                     PostQuitMessage(0);

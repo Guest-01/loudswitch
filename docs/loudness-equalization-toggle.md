@@ -145,6 +145,15 @@ Win11의 `IAudioSystemEffectsPropertyStore`가 문서화된 정식 API지만,
 4. 시작 → `SetPropertyValue(id, TRUE, loudnessKey, ON)`, 종료 → `... OFF`.
 5. 쓰기 전 `GetPropertyValue`로 키 존재/현재 값 확인, 미지원 시 skip.
 
+### 폴링 비용 실측과 스레드 모델 (2026-11-14)
+
+- **폴링 비용**: `Process.GetProcessesByName` 1회 ≈ CPU 1.8ms (프로세스 250개 환경, PowerShell 5.1로 200회 평균).
+  1초 주기면 코어 하나의 약 0.2% → 이벤트 기반(창 생성 훅, 프로세스 핸들 대기)으로 바꿔도 효율 이득이
+  사실상 없다. 반면 핸들 대기는 안티치트(Vanguard 등)와 충돌할 수 있어 **폴링 유지**. 기본 장치 추적(3초)도 같은 이유로 유지.
+- **스레드 모델 (트레이)**: 감시 콜백(스레드풀)과 메뉴/타이머(메시지 루프)가 `_endpointId`·`_watcher`를 잠금 없이
+  공유해, 장치 변경 순간 이전 장치에 토글될 수 있었다. → 감시 콜백은 `TrayShell.Post`로 메시지 루프 스레드에
+  넘기고, 그 스레드에서 "아직 현재 감시자인가"를 확인한 뒤에만 적용한다. 상태는 메시지 루프 스레드만 만진다.
+
 ### 개발 환경 — Windows 네이티브 (WSL 비권장)
 
 **결정: Windows 파일시스템에 클론하여 Windows 네이티브 툴체인으로 개발한다.**

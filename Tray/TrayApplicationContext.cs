@@ -9,6 +9,10 @@ namespace Loudswitch.Tray;
 /// 트레이 컨트롤러(WinForms 없음). 앱이 실행 중인 동안 항상 대상 프로세스를 감시해
 /// 시작=ON / 종료=OFF로 Loudness EQ를 토글한다(멈추려면 앱 종료). 별도 "활성화" 토글은 없다.
 /// 트레이 아이콘은 현재 Loudness 상태(켜짐=컬러 / 꺼짐=회색)를 표시한다.
+///
+/// 스레드 모델: 모든 상태(_config, _endpointId, _watcher 등)는 <b>메시지 루프 스레드에서만</b> 읽고 쓴다.
+/// 메뉴·타이머는 원래 그 스레드에서 오고, 감시 콜백(스레드풀)은 <see cref="TrayShell.Post"/>로 넘겨온다.
+/// 그래서 잠금이 필요 없다.
 /// </summary>
 internal sealed class TrayApplicationContext : IDisposable
 {
@@ -210,11 +214,23 @@ internal sealed class TrayApplicationContext : IDisposable
             return; // 대상 프로그램 미설정 → 감시/토글 안 함
 
         // syncInitialState=true: 시작 시 대상이 떠 있지 않으면 OFF로 동기화(크래시 잔존 ON 정리).
-        _watcher = new ProcessWatcher(_processName, syncInitialState: true);
-        // 콜백은 스레드풀 스레드 — COM/Shell_NotifyIcon은 스레드 무관하게 안전.
-        _watcher.Started += _ => Apply(true, notify: true);
-        _watcher.Stopped += () => Apply(false, notify: true);
-        _watcher.Start();
+        var watcher = new ProcessWatcher(_processName, syncInitialState: true);
+        _watcher = watcher;
+
+        // 콜백은 스레드풀 스레드에서 온다 → 직접 상태를 만지지 않고 메시지 루프 스레드로 넘긴다.
+        // 거기서 "아직 현재 감시자인가"를 확인해, 장치/대상 변경으로 교체된 옛 감시자의
+        // 늦게 도착한 이벤트가 새 대상(엔드포인트)에 잘못 적용되는 것을 막는다.
+        watcher.Started += _ => _shell.Post(() =>
+        {
+            if (_watcher == watcher)
+                Apply(true, notify: true);
+        });
+        watcher.Stopped += () => _shell.Post(() =>
+        {
+            if (_watcher == watcher)
+                Apply(false, notify: true);
+        });
+        watcher.Start();
     }
 
     /// <summary>
@@ -235,6 +251,7 @@ internal sealed class TrayApplicationContext : IDisposable
 
         _endpointId = current;
         _watcher?.Dispose();
+        _watcher = null; // StartWatcher가 일찍 반환해도 옛 감시자가 "현재"로 남지 않도록
         StartWatcher(); // 새 장치에 현재 프로세스 상태 재동기화 (타이머는 계속)
         UpdateIcon();
     }
