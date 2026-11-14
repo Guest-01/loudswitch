@@ -28,8 +28,6 @@ internal sealed class TrayApplicationContext : IDisposable
         ("Discord", "Discord"),
     ];
 
-    private const uint DefaultDeviceTimerMs = 3000;
-
     private readonly TrayShell _shell;
     private readonly RestoreState _restore = RestoreState.Load();
 
@@ -37,17 +35,31 @@ internal sealed class TrayApplicationContext : IDisposable
     private string _processName;
     private string? _endpointId;
     private ProcessWatcher? _watcher;
+    private DeviceNotifications? _deviceNotifications; // 기본 장치·장치 상태 변경 알림(공식 IMMNotificationClient)
+    private IDisposable? _loudnessWatch;               // 대상 장치의 평준화 값 변경 알림(공식 효과 저장소)
 
     public TrayApplicationContext(Config config)
     {
         _config = config;
         _processName = config.ProcessName;
-        _endpointId = EndpointResolver.Resolve(config.DeviceGuid);
+        _endpointId = EndpointResolver.Resolve(config.DeviceId);
 
         _shell = new TrayShell("Loudswitch");
         _shell.MenuRequested = ShowMenu;
-        _shell.TimerTick = CheckDefaultDevice;
 
+        // 알림 콜백은 시스템 스레드에서 온다 → 상태는 만지지 않고 메시지 루프 스레드로 넘긴다.
+        try
+        {
+            _deviceNotifications = new DeviceNotifications(
+                defaultRenderChanged: () => _shell.Post(CheckDefaultDevice),
+                devicesChanged: () => _shell.Post(OnDevicesChanged));
+        }
+        catch
+        {
+            _deviceNotifications = null; // 알림을 못 받아도 메뉴를 열 때마다 기본 장치를 다시 확인한다
+        }
+
+        WatchTargetLoudness();
         StartWatching(); // 실행 = 동작. 멈추려면 종료.
         UpdateIcon();
     }
@@ -63,9 +75,12 @@ internal sealed class TrayApplicationContext : IDisposable
 
     private void ShowMenu()
     {
+        CheckDefaultDevice(); // 알림을 놓쳤더라도 메뉴를 열 때 대상 장치를 바로잡는다(자가 치유)
         _shell.ShowMenu(m =>
         {
-            m.Label($"Loudswitch — {StatusText()}");
+            (string programLine, string deviceLine) = StatusLines();
+            m.Label(programLine);
+            m.Label(deviceLine);
             m.Separator();
             m.Submenu("적용할 프로그램", BuildProgramMenu);
             m.Submenu("출력 장치", BuildDeviceMenu);
@@ -103,7 +118,7 @@ internal sealed class TrayApplicationContext : IDisposable
 
     private void BuildDeviceMenu(SubMenu sub)
     {
-        sub.Check("기본 출력 장치 (자동 선택)", _config.DeviceGuid is null, () => SelectDevice(null));
+        sub.Check("기본 출력 장치 (자동 선택)", _config.DeviceId is null, () => SelectDevice(null));
 
         IReadOnlyList<string> ids;
         try
@@ -117,14 +132,11 @@ internal sealed class TrayApplicationContext : IDisposable
 
         foreach (string id in ids)
         {
-            string guid = MMDevicePaths.DeviceGuid(id);
             bool supported = LoudnessEqualizationSetting.Read(id).State
                 != LoudnessEqualizationSetting.State.Unsupported;
-            bool selected = _config.DeviceGuid is not null &&
-                string.Equals(MMDevicePaths.NormalizeGuid(guid), MMDevicePaths.NormalizeGuid(_config.DeviceGuid),
-                    StringComparison.OrdinalIgnoreCase);
+            bool selected = string.Equals(id, _config.DeviceId, StringComparison.OrdinalIgnoreCase);
 
-            sub.Check($"{EndpointName.Read(id)} · {(supported ? "지원" : "미지원")}", selected, () => SelectDevice(guid));
+            sub.Check($"{EndpointName.Read(id)} · {(supported ? "지원" : "미지원")}", selected, () => SelectDevice(id));
         }
     }
 
@@ -137,9 +149,10 @@ internal sealed class TrayApplicationContext : IDisposable
         Reconfigure();
     }
 
-    private void SelectDevice(string? guid)
+    private void SelectDevice(string? endpointId)
     {
-        _config.DeviceGuid = guid;
+        _config.DeviceId = endpointId;
+        _config.DeviceGuid = null;
         _config.Save();
         Reconfigure();
     }
@@ -186,9 +199,10 @@ internal sealed class TrayApplicationContext : IDisposable
     /// <summary>설정 변경 후 대상 재해석 + 감시 재시작(앱이 바꿔 둔 장치는 설정대로 원래 상태로).</summary>
     private void Reconfigure()
     {
-        StopWatching(restore: true); // 감시/타이머 중지 + 원래 상태 복원(설정에 따라)
+        StopWatching(restore: true); // 감시 중지 + 원래 상태 복원(설정에 따라)
         _processName = _config.ProcessName;
-        _endpointId = EndpointResolver.Resolve(_config.DeviceGuid);
+        _endpointId = EndpointResolver.Resolve(_config.DeviceId);
+        WatchTargetLoudness();
 
         if (_endpointId is null && !string.IsNullOrWhiteSpace(_config.ProcessName))
             _shell.Warn("선택한 출력 장치를 찾지 못했습니다. 감지는 동작하지만 토글은 skip됩니다.");
@@ -197,16 +211,10 @@ internal sealed class TrayApplicationContext : IDisposable
         UpdateIcon();
     }
 
-    private void StartWatching()
-    {
-        if (_config.DeviceGuid is null)
-            _shell.StartDefaultDeviceTimer(DefaultDeviceTimerMs); // 자동 모드에서만 기본 장치 추적
-        StartWatcher();
-    }
+    private void StartWatching() => StartWatcher();
 
     private void StopWatching(bool restore)
     {
-        _shell.StopDefaultDeviceTimer();
         _watcher?.Dispose();
         _watcher = null;
         if (restore)
@@ -258,11 +266,11 @@ internal sealed class TrayApplicationContext : IDisposable
 
     /// <summary>
     /// "기본 출력 장치(자동)" 모드에서 기본 장치가 바뀌면 대상 엔드포인트를 따라간다.
-    /// Win32 타이머(메시지 루프 스레드) 폴링 — 프로세스 감지와 같은 자가치유 방식.
+    /// 공식 기본 장치 변경 알림(<c>OnDefaultDeviceChanged</c>)으로 즉시 호출되고, 메뉴를 열 때도 한 번 확인한다.
     /// </summary>
     private void CheckDefaultDevice()
     {
-        if (_config.DeviceGuid is not null)
+        if (_config.DeviceId is not null)
             return; // 자동 모드에서만 추적
 
         string? current = EndpointResolver.Default();
@@ -272,10 +280,38 @@ internal sealed class TrayApplicationContext : IDisposable
         RestoreOrForget(); // 이전 기본 장치를 원래 상태로(설정에 따라)
 
         _endpointId = current;
+        WatchTargetLoudness();
         _watcher?.Dispose();
         _watcher = null; // StartWatcher가 일찍 반환해도 옛 감시자가 "현재"로 남지 않도록
-        StartWatcher(); // 새 장치에 현재 프로세스 상태 재동기화 (타이머는 계속)
+        StartWatcher(); // 새 장치에 현재 프로세스 상태 재동기화
         UpdateIcon();
+    }
+
+    /// <summary>장치가 추가·제거되거나 상태가 바뀜(예: 헤드폰을 뺐다 꽂음) → 값 변경 알림을 다시 걸고 표시를 맞춘다.</summary>
+    private void OnDevicesChanged()
+    {
+        WatchTargetLoudness();
+        UpdateIcon();
+    }
+
+    /// <summary>
+    /// 대상 장치의 평준화 값 변경 알림을 (다시) 건다. Windows 설정 화면이나 다른 앱이 값을 바꾸면 아이콘이 바로 따라간다.
+    /// 공식 저장소를 쓰지 않는 장치(옛 방식)는 알림이 없으므로 메뉴를 열거나 토글할 때 다시 읽는다.
+    /// </summary>
+    private void WatchTargetLoudness()
+    {
+        _loudnessWatch?.Dispose();
+        _loudnessWatch = null;
+        if (_endpointId is null)
+            return;
+        try
+        {
+            _loudnessWatch = EffectsPropertyStore.WatchLoudness(_endpointId, () => _shell.Post(UpdateIcon));
+        }
+        catch
+        {
+            // 알림을 못 걸어도 동작에는 지장 없음
+        }
     }
 
     /// <summary>
@@ -350,23 +386,34 @@ internal sealed class TrayApplicationContext : IDisposable
     /// <summary>현재 Loudness 상태를 아이콘(켜짐=컬러 / 꺼짐=회색)과 툴팁에 반영.</summary>
     private void UpdateIcon()
     {
-        bool on = _endpointId is not null &&
-            LoudnessEqualizationSetting.Read(_endpointId).State == LoudnessEqualizationSetting.State.On;
-        _shell.SetActive(on, $"Loudswitch — 평준화 {(on ? "켜짐" : "꺼짐")}");
+        (string device, string loudness, bool on) = DeviceStatus();
+        // 툴팁: 어떤 장치를 다루는지와 상태(최대 127자, 넘치면 잘림)
+        _shell.SetActive(on, $"Loudswitch — {device} · {loudness}");
     }
 
-    private string StatusText()
+    /// <summary>메뉴 맨 위 상태 두 줄: 대상 프로그램 / 대상 장치와 평준화 상태.</summary>
+    private (string ProgramLine, string DeviceLine) StatusLines()
     {
-        string loud = _endpointId is null
-            ? "대상 장치 없음"
-            : LoudnessEqualizationSetting.Read(_endpointId).State switch
-            {
-                LoudnessEqualizationSetting.State.On => "평준화 켜짐",
-                LoudnessEqualizationSetting.State.Off => "평준화 꺼짐",
-                _ => "미지원 장치",
-            };
         string target = string.IsNullOrWhiteSpace(_processName) ? "(미설정)" : _processName;
-        return $"대상: {target} · {loud}";
+        (string device, string loudness, _) = DeviceStatus();
+        string mode = _config.DeviceId is null ? " (기본 장치 자동)" : "";
+        return ($"Loudswitch — 대상 프로그램: {target}", $"장치: {device}{mode} · {loudness}");
+    }
+
+    /// <summary>현재 대상 장치의 이름, 평준화 상태 문구, 켜짐 여부.</summary>
+    private (string Device, string Loudness, bool On) DeviceStatus()
+    {
+        if (_endpointId is null)
+            return ("출력 장치 없음", "토글 안 함", false);
+
+        LoudnessEqualizationSetting.State state = LoudnessEqualizationSetting.Read(_endpointId).State;
+        string loudness = state switch
+        {
+            LoudnessEqualizationSetting.State.On => "평준화 켜짐",
+            LoudnessEqualizationSetting.State.Off => "평준화 꺼짐",
+            _ => "평준화 미지원",
+        };
+        return (EndpointName.Read(_endpointId), loudness, state == LoudnessEqualizationSetting.State.On);
     }
 
     private bool IsSelectedProcess(string exe) =>
@@ -415,6 +462,10 @@ internal sealed class TrayApplicationContext : IDisposable
 
     public void Dispose()
     {
+        _loudnessWatch?.Dispose();
+        _loudnessWatch = null;
+        _deviceNotifications?.Dispose();
+        _deviceNotifications = null;
         _watcher?.Dispose();
         _watcher = null;
         _shell.Dispose();

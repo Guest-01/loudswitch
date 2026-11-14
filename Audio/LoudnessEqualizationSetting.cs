@@ -81,8 +81,8 @@ internal static class LoudnessEqualizationSetting
             return new Report(v ? State.On : State.Off, Backend.Official, $"공식 API · {official.Layer} 층");
 
         // 2) 옛 방식 위치
-        string fxPath = MMDevicePaths.FxProperties(endpointId);
-        using RegistryKey? fx = Registry.LocalMachine.OpenSubKey(fxPath);
+        string? fxPath = MMDevicePaths.FxProperties(endpointId);
+        using RegistryKey? fx = fxPath is null ? null : Registry.LocalMachine.OpenSubKey(fxPath);
         if (fx?.GetValue(PropertyKey) is byte[] raw)
         {
             State s = raw.AsSpan().SequenceEqual(KnownOnValue) ? State.On : State.Off;

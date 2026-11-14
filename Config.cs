@@ -19,7 +19,16 @@ internal sealed class Config
     /// </summary>
     public string ProcessName { get; set; } = "";
 
-    /// <summary>대상 엔드포인트 장치 GUID. <c>null</c>이면 기본 출력 장치(권장 기본값).</summary>
+    /// <summary>
+    /// 대상 출력 장치의 엔드포인트 ID(불투명한 문자열, 그대로 저장·비교). <c>null</c>이면 기본 출력 장치(권장 기본값).
+    /// </summary>
+    public string? DeviceId { get; set; }
+
+    /// <summary>
+    /// 예전 형식(엔드포인트 ID 끝의 GUID만 저장). 읽을 때 <see cref="DeviceId"/>로 옮기고 지운다.
+    /// 옮기지 못했으면(장치를 찾지 못함) 남겨 두고 다음 실행 때 다시 시도한다.
+    /// </summary>
+    [JsonIgnore(Condition = JsonIgnoreCondition.WhenWritingNull)]
     public string? DeviceGuid { get; set; }
 
     /// <summary>
@@ -52,6 +61,7 @@ internal sealed class Config
                 if (cfg is not null)
                 {
                     // 미설정(빈 ProcessName)도 유효한 상태다 — 손상 판정은 역직렬화 실패만.
+                    cfg.MigrateLegacyDevice();
                     return cfg;
                 }
             }
@@ -65,6 +75,27 @@ internal sealed class Config
         def.Save();
         created = true;
         return def;
+    }
+
+    private void MigrateLegacyDevice()
+    {
+        if (DeviceId is not null || string.IsNullOrWhiteSpace(DeviceGuid))
+            return;
+
+        string? id = Audio.EndpointResolver.MigrateLegacyGuid(DeviceGuid);
+        if (id is null)
+            return; // 이번엔 못 찾음 → 기본 장치로 동작, 다음 실행 때 재시도
+
+        DeviceId = id;
+        DeviceGuid = null;
+        try
+        {
+            Save();
+        }
+        catch
+        {
+            // 저장 실패해도 이번 실행에는 메모리 값으로 동작
+        }
     }
 
     public void Save()

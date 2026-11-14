@@ -1,37 +1,23 @@
 namespace Loudswitch.Audio;
 
 /// <summary>
-/// 엔드포인트 ID로부터 MMDevices 레지스트리 경로를 구성한다.
-/// 레지스트리의 장치 키 이름은 엔드포인트 ID 끝의 <c>{GUID}</c> 부분이다.
+/// <b>옛 방식(비공개) 경로 전용</b>: 엔드포인트의 MMDevices 레지스트리 위치를 만든다.
+///
+/// 이 레지스트리 구조와, 레지스트리 키 이름이 엔드포인트 ID 끝의 <c>{GUID}</c>라는 사실은 둘 다 문서화되지 않았다.
+/// 공식 API가 없는 두 가지 일(효과 모듈 체인 확인, 옛 드라이버의 평준화 값)에만 쓰고, 그 밖의 곳에서는
+/// 엔드포인트 ID를 불투명한 문자열로 다룬다. ID 형식이 예상과 다르면 null을 돌려 해당 경로를 건너뛴다.
 /// </summary>
 internal static class MMDevicePaths
 {
     private const string RenderRoot =
         @"SOFTWARE\Microsoft\Windows\CurrentVersion\MMDevices\Audio\Render";
 
-    /// <summary>
-    /// <c>{0.0.0.00000000}.{GUID}</c> 형식의 엔드포인트 ID에서 마지막 중괄호 GUID를 추출한다.
-    /// </summary>
-    public static string DeviceGuid(string endpointId)
+    /// <summary>음향 효과(APO) 설정 저장소(옛 방식 위치). 형식을 알 수 없는 ID면 null.</summary>
+    public static string? FxProperties(string endpointId)
     {
         int lastBrace = endpointId.LastIndexOf('{');
-        if (lastBrace < 0)
-            throw new FormatException($"예상치 못한 엔드포인트 ID 형식: {endpointId}");
-        return endpointId[lastBrace..];
-    }
-
-    /// <summary>음향 효과(APO) 설정 저장소. Loudness EQ 키가 여기 있다.</summary>
-    public static string FxProperties(string endpointId) =>
-        $@"{RenderRoot}\{DeviceGuid(endpointId)}\FxProperties";
-
-    /// <summary>장치 메타데이터 저장소. friendly name 등이 여기 있다.</summary>
-    public static string Properties(string endpointId) =>
-        $@"{RenderRoot}\{DeviceGuid(endpointId)}\Properties";
-
-    /// <summary>중괄호 보정: "xxxx" → "{xxxx}", 이미 중괄호면 그대로.</summary>
-    public static string NormalizeGuid(string s)
-    {
-        s = s.Trim();
-        return s.StartsWith('{') ? s : "{" + s.Trim('{', '}') + "}";
+        if (lastBrace < 0 || !endpointId.EndsWith('}'))
+            return null;
+        return $@"{RenderRoot}\{endpointId[lastBrace..]}\FxProperties";
     }
 }

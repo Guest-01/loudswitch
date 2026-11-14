@@ -176,7 +176,8 @@ IPolicyConfig::SetPropertyValue(deviceId, /*bFxStore=*/TRUE, key, &pv); // 쓰�
 
 - **폴링 비용**: `Process.GetProcessesByName` 1회 ≈ CPU 1.8ms (프로세스 250개 환경, PowerShell 5.1로 200회 평균).
   1초 주기면 코어 하나의 약 0.2% → 이벤트 기반(창 생성 훅, 프로세스 핸들 대기)으로 바꿔도 효율 이득이
-  사실상 없다. 반면 핸들 대기는 안티치트(Vanguard 등)와 충돌할 수 있어 **폴링 유지**. 기본 장치 추적(3초)도 같은 이유로 유지.
+  사실상 없다. 반면 핸들 대기는 안티치트(Vanguard 등)와 충돌할 수 있어 **폴링 유지**.
+  (기본 장치 추적은 2026-11-15에 3초 폴링 → 공식 알림 `IMMNotificationClient`로 바꿨다. 아래 "공식 방식 감사" 참고.)
 - **스레드 모델 (트레이)**: 감시 콜백(스레드풀)과 메뉴/타이머(메시지 루프)가 `_endpointId`·`_watcher`를 잠금 없이
   공유해, 장치 변경 순간 이전 장치에 토글될 수 있었다. → 감시 콜백은 `TrayShell.Post`로 메시지 루프 스레드에
   넘기고, 그 스레드에서 "아직 현재 감시자인가"를 확인한 뒤에만 적용한다. 상태는 메시지 루프 스레드만 만진다.
@@ -197,6 +198,40 @@ IPolicyConfig::SetPropertyValue(deviceId, /*bFxStore=*/TRUE, key, &pv); // 쓰�
 검증(헤드폰, `timeout.exe`를 대상으로, 설정·기록 폴더만 바꾼 복사본): ① 원래 꺼짐 → 실행 중 켜짐 → 종료 후 꺼짐,
 ② 원래 켜짐 → 종료 후에도 켜짐, ③ 켜진 상태에서 앱 강제 종료 → 앱 없이 대상 종료 → 앱 재시작 시 꺼짐으로 복원. 모두 통과.
 트레이 메뉴 "종료"와 기본 장치 변경 경로는 직접 실행해 보지 못했다.
+
+### 공식 방식 감사 (2026-11-15)
+
+기능마다 "공식 API·문서 권장 방식으로 되어 있는가"를 Microsoft 문서와 실측으로 대조했다.
+
+**공식 방식으로 바꾼 것**
+
+| 기능 | 이전 | 지금 | 근거 |
+|---|---|---|---|
+| DPI 인식 | 선언 없음(WinForms 제거 `dd9a684`에서 빠짐, 150% 화면에서 흐림) | `app.manifest`에 PerMonitorV2 | "Setting the default DPI awareness": 매니페스트 권장 |
+| 작업 표시줄 재생성 | 처리 안 함(탐색기 재시작 시 아이콘 소실) | `TaskbarCreated` 수신 시 아이콘 재생성·재등록 | "The Taskbar" — Taskbar Creation Notification |
+| 트레이 메뉴 | `WM_NULL` 누락, 커서 위치 | `SetForegroundWindow` → `TrackPopupMenu` → `WM_NULL`, `SM_MENUDROPALIGNMENT` | TrackPopupMenu Remarks |
+| 트레이 동작 버전 | 기본(0) | `NIM_SETVERSION` 4 + `NIF_SHOWTIP`, NIN_SELECT/KEYSELECT/WM_CONTEXTMENU, wParam 기준 좌표 | Shell_NotifyIcon / NOTIFYICONDATA |
+| 트레이 아이콘 | 32px 단일 | 16~256px 다중 .ico + `GetSystemMetricsForDpi(SM_CXSMICON)` 크기 선택, 알림엔 큰 아이콘 | 생성: `dev/Generate-TrayIcons.ps1` |
+| 파일 선택 | `GetOpenFileNameW` | `IFileOpenDialog`(Common Item Dialog) | Vista부터 권장 대체 |
+| 장치 이름 | 레지스트리 `Properties` 직접 읽기(이 PC에선 "헤드폰"만 나옴) | `IMMDevice::OpenPropertyStore` + `PKEY_Device_FriendlyName` | Device Properties |
+| 엔드포인트 ID | 문자열에서 GUID를 잘라 저장·비교 | ID 전체를 불투명하게 저장·비교, 설정은 `DeviceId`(예전 `DeviceGuid`는 한 번 이전) | IMMDevice::GetId: "파싱하지 말 것" |
+| 기본 장치 변경 | 3초 폴링 | `IMMNotificationClient::OnDefaultDeviceChanged` + 메뉴 열 때 재확인 | 공식 알림 |
+| 외부 평준화 변경 | 감지 안 함 | `IAudioSystemEffectsPropertyStore::RegisterPropertyChangeNotification` | 공식 알림 |
+
+개발용 명령의 장치 인자도 GUID 대신 `list` 번호 또는 엔드포인트 ID 전체로 바꿨다.
+
+**공식 방법이 없어 남긴 것(범위를 좁혀 격리)**
+
+- Microsoft 효과 모듈이 붙어 있는지 판정: 레지스트리 FxProperties의 `PKEY_FX_*EffectClsid` 읽기.
+  공식 효과 탐색 API `IAudioEffectsManager`를 활성 장치 4개에 시험했으나 **효과 0개**(Microsoft 기본 WM LFX/GFX 모듈이
+  탐색 인터페이스를 구현하지 않음). `MMDevicePaths`만 엔드포인트 ID 끝을 해석하며, 형식이 다르면 이 경로를 건너뛴다.
+- 공식 저장소의 컨텍스트 GUID `{b13412ee-...}`: 목록을 주는 API 없음(드라이버 INF가 정함).
+- 옛 드라이버용 `IPolicyConfig` + 레지스트리: 예비 경로로만.
+- 공식 저장소의 권한 조건(`audioDeviceConfiguration`): 문서 조건이지만 실제로는 요구되지 않음.
+
+**검증(NativeAOT 게시본, 설정 폴더만 바꾼 복사본)**: DPI 인식 2(모니터별), 예전 GUID 설정 → `DeviceId` 이전,
+다른 프로세스의 평준화 변경 → 트레이가 알림으로 즉시 갱신, 아이콘 강제 삭제 후 `TaskbarCreated` → DPI 144로 재등록.
+기본 장치 변경 알림의 실제 발생, 메뉴·파일 선택 창·아이콘의 눈으로 보는 확인은 수동 확인 필요.
 
 ### 개발 환경 — Windows 네이티브 (WSL 비권장)
 

@@ -121,15 +121,60 @@ internal static partial class EffectsPropertyStore
         }
         finally
         {
-            PropVariantClear(ref pv);
+            PropVariant.Clear(ref pv);
         }
     }
 
-    [LibraryImport("ole32.dll")]
-    private static partial int PropVariantClear(ref PropVariant pv);
+    /// <summary>
+    /// 이 장치의 평준화 값이 바뀌면(Windows 설정 화면, 다른 앱, 우리 자신의 쓰기 포함) <paramref name="changed"/>를 부른다.
+    /// 공식 API(<c>RegisterPropertyChangeNotification</c>)를 쓸 수 없는 장치면 <c>null</c>.
+    /// 콜백은 시스템 스레드에서 온다 — 받은 쪽은 바로 다른 스레드로 넘겨야 한다. Dispose 시 구독 해제.
+    /// </summary>
+    public static IDisposable? WatchLoudness(string endpointId, Action changed)
+    {
+        IAudioSystemEffectsPropertyStore? store = Open(endpointId, out _);
+        if (store is null)
+            return null;
+
+        var client = new EffectsChangeClient(LoudnessKey, changed);
+        return store.RegisterPropertyChangeNotification(client) == 0 ? new Subscription(store, client) : null;
+    }
+
+    private sealed class Subscription(IAudioSystemEffectsPropertyStore store, EffectsChangeClient client) : IDisposable
+    {
+        private bool _disposed;
+
+        public void Dispose()
+        {
+            if (_disposed)
+                return;
+            _disposed = true;
+            store.UnregisterPropertyChangeNotification(client);
+        }
+    }
 }
 
-// IAudioSystemEffectsPropertyStore — 앞쪽 세 메서드만 선언(뒤쪽 Reset/Register 슬롯은 호출하지 않으므로 생략 가능).
+[GeneratedComClass]
+internal sealed partial class EffectsChangeClient(PropertyKey watched, Action changed) : IAudioSystemEffectsPropertyChangeNotificationClient
+{
+    public int OnPropertyChanged(int storeType, PropertyKey key)
+    {
+        if (key.FormatId == watched.FormatId && key.PropertyId == watched.PropertyId)
+        {
+            try
+            {
+                changed();
+            }
+            catch
+            {
+                // 시스템 스레드로 예외를 돌려보내지 않는다.
+            }
+        }
+        return 0;
+    }
+}
+
+// IAudioSystemEffectsPropertyStore (Windows SDK 10.0.26100 mmdeviceapi.h, 메서드 순서 그대로)
 [GeneratedComInterface]
 [Guid("302AE7F9-D7E0-43E4-971B-1F8293613D2A")]
 internal partial interface IAudioSystemEffectsPropertyStore
@@ -137,6 +182,18 @@ internal partial interface IAudioSystemEffectsPropertyStore
     [PreserveSig] int OpenDefaultPropertyStore(uint stgmAccess, out IPropertyStore? store);
     [PreserveSig] int OpenUserPropertyStore(uint stgmAccess, out IPropertyStore? store);
     [PreserveSig] int OpenVolatilePropertyStore(uint stgmAccess, out IPropertyStore? store);
+    [PreserveSig] int ResetUserPropertyStore();
+    [PreserveSig] int ResetVolatilePropertyStore();
+    [PreserveSig] int RegisterPropertyChangeNotification(IAudioSystemEffectsPropertyChangeNotificationClient callback);
+    [PreserveSig] int UnregisterPropertyChangeNotification(IAudioSystemEffectsPropertyChangeNotificationClient callback);
+}
+
+// 콜백: type = AUDIO_SYSTEMEFFECTS_PROPERTYSTORE_TYPE(0 Default, 1 User, 2 Volatile)
+[GeneratedComInterface]
+[Guid("20049D40-56D5-400E-A2EF-385599FEED49")]
+internal partial interface IAudioSystemEffectsPropertyChangeNotificationClient
+{
+    [PreserveSig] int OnPropertyChanged(int storeType, PropertyKey key);
 }
 
 // IPropertyStore (propsys.h) — Windows 표준 속성 저장소.

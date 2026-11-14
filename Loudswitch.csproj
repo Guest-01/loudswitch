@@ -8,6 +8,8 @@
     <AssemblyName>Loudswitch</AssemblyName>
     <!-- exe 파일 아이콘(탐색기/작업표시줄/알림 브랜딩에 사용). -->
     <ApplicationIcon>Tray\assets\active.ico</ApplicationIcon>
+    <!-- DPI 인식(PerMonitorV2)·Common Controls v6 선언. NativeAOT도 Win32 리소스로 포함한다. -->
+    <ApplicationManifest>app.manifest</ApplicationManifest>
     <Nullable>enable</Nullable>
     <ImplicitUsings>enable</ImplicitUsings>
     <LangVersion>latest</LangVersion>

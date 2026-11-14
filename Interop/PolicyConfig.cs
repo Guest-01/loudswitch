@@ -83,7 +83,16 @@ internal struct PropVariant
     public const ushort VT_BOOL = 11;
     public const ushort VT_CLSID = 72;
 
+    /// <summary>GetValue 등으로 받은 PROPVARIANT가 가진 메모리(문자열 등)를 해제한다.</summary>
+    public static void Clear(ref PropVariant pv) => PropVariantNative.PropVariantClear(ref pv);
+
     // VARIANT_TRUE = -1(0xFFFF), VARIANT_FALSE = 0
     public static PropVariant Bool(bool value) =>
         new() { Vt = VT_BOOL, BoolVal = value ? (short)-1 : (short)0 };
+}
+
+internal static partial class PropVariantNative
+{
+    [LibraryImport("ole32.dll")]
+    internal static partial int PropVariantClear(ref PropVariant pv);
 }

@@ -97,7 +97,7 @@ internal static class Program
 
     private static int RunSet(string[] args)
     {
-        // set <guid|endpointId> on|off
+        // set <번호|endpointId> on|off
         if (args.Length < 3)
             return Usage();
 
@@ -105,7 +105,7 @@ internal static class Program
         if (mode != "on" && mode != "off")
             return Usage();
 
-        string? endpointId = EndpointResolver.Resolve(args[1]);
+        string? endpointId = EndpointResolver.ResolveArgument(args[1]);
         if (endpointId is null)
             return DeviceNotFound(args[1]);
 
@@ -114,11 +114,11 @@ internal static class Program
 
     private static int RunToggle(string[] args)
     {
-        // toggle <guid|endpointId>
+        // toggle <번호|endpointId>
         if (args.Length < 2)
             return Usage();
 
-        string? endpointId = EndpointResolver.Resolve(args[1]);
+        string? endpointId = EndpointResolver.ResolveArgument(args[1]);
         if (endpointId is null)
             return DeviceNotFound(args[1]);
 
@@ -213,7 +213,7 @@ internal static class Program
 
         string name = args[1];
 
-        string? endpointId = EndpointResolver.Resolve(args.Length >= 3 ? args[2] : null);
+        string? endpointId = args.Length >= 3 ? EndpointResolver.ResolveArgument(args[2]) : EndpointResolver.Default();
         if (endpointId is null)
         {
             Console.Error.WriteLine(args.Length >= 3
@@ -313,7 +313,7 @@ internal static class Program
     private static int DeviceNotFound(string arg)
     {
         Console.Error.WriteLine($"장치를 찾지 못했습니다: {arg}");
-        Console.Error.WriteLine("  `dotnet run`으로 GUID를 확인하세요.");
+        Console.Error.WriteLine("  `dotnet run -- list`로 장치 번호나 엔드포인트 ID를 확인하세요.");
         return 1;
     }
 
@@ -322,10 +322,11 @@ internal static class Program
         Console.WriteLine("사용법:");
         Console.WriteLine("  dotnet run                         트레이 앱 실행 (config.json 대상)");
         Console.WriteLine("  dotnet run -- list                 활성 출력 장치 + Loudness 상태 나열");
-        Console.WriteLine("  dotnet run -- set <guid> on|off    IPolicyConfig로 Loudness 쓰기");
-        Console.WriteLine("  dotnet run -- toggle <guid>        현재 상태의 반대로 토글");
+        Console.WriteLine("  dotnet run -- set <장치> on|off    트레이와 같은 경로로 Loudness 쓰기");
+        Console.WriteLine("  dotnet run -- toggle <장치>        현재 상태의 반대로 토글");
         Console.WriteLine("  dotnet run -- watch <name> [ms]    프로세스 시작/종료 감지 (로그만)");
-        Console.WriteLine("  dotnet run -- auto <name> [guid]   프로세스 감지 → Loudness 토글 (guid 없으면 기본 장치)");
+        Console.WriteLine("  dotnet run -- auto <name> [장치]   프로세스 감지 → Loudness 토글 (장치 없으면 기본 장치)");
+        Console.WriteLine("  <장치> = list에 나온 번호(예: 1) 또는 엔드포인트 ID 전체");
         return 2;
     }
 

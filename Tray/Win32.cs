@@ -8,13 +8,15 @@ namespace Loudswitch.Tray;
 internal static unsafe partial class Win32
 {
     // 윈도우 메시지
+    public const uint WM_NULL = 0x0000;
     public const uint WM_DESTROY = 0x0002;
-    public const uint WM_TIMER = 0x0113;
     public const uint WM_APP_TRAY = 0x0400 + 1; // 트레이 콜백(WM_USER 영역)
     public const uint WM_APP_INVOKE = 0x0400 + 2; // 다른 스레드가 Post한 작업 실행 요청
-    public const uint WM_LBUTTONUP = 0x0202;
-    public const uint WM_RBUTTONUP = 0x0205;
     public const uint WM_CONTEXTMENU = 0x007B;
+
+    // 트레이 콜백 이벤트 (NOTIFYICON_VERSION_4: lParam 하위 워드)
+    public const uint NIN_SELECT = 0x0400;    // 마우스 왼쪽 클릭
+    public const uint NIN_KEYSELECT = 0x0401; // 키보드로 선택(Enter/Space)
 
     // 메뉴 플래그
     public const uint MF_STRING = 0x0000;
@@ -27,23 +29,23 @@ internal static unsafe partial class Win32
     public const uint TPM_RETURNCMD = 0x0100;
     public const uint TPM_RIGHTBUTTON = 0x0002;
     public const uint TPM_NONOTIFY = 0x0080;
+    public const uint TPM_LEFTALIGN = 0x0000;
+    public const uint TPM_RIGHTALIGN = 0x0008;
+    public const int SM_MENUDROPALIGNMENT = 40;
 
     // Shell_NotifyIcon
     public const uint NIM_ADD = 0x0;
     public const uint NIM_MODIFY = 0x1;
     public const uint NIM_DELETE = 0x2;
+    public const uint NIM_SETVERSION = 0x4;
+    public const uint NOTIFYICON_VERSION_4 = 4;
     public const uint NIF_MESSAGE = 0x1;
     public const uint NIF_ICON = 0x2;
     public const uint NIF_TIP = 0x4;
     public const uint NIF_INFO = 0x10;       // 풍선/토스트 알림(szInfo/szInfoTitle)
-    public const uint NIIF_USER = 0x4;       // 알림 아이콘으로 hIcon(우리 트레이 아이콘)을 사용
+    public const uint NIF_SHOWTIP = 0x80;    // 버전 4에서도 표준 툴팁 표시(없으면 툴팁이 숨겨짐)
+    public const uint NIIF_USER = 0x4;       // 알림 아이콘으로 hBalloonIcon(없으면 hIcon)을 사용
     public const uint NIIF_LARGE_ICON = 0x20; // 큰 아이콘 사용
-
-    // OPENFILENAME 플래그
-    public const int OFN_FILEMUSTEXIST = 0x1000;
-    public const int OFN_PATHMUSTEXIST = 0x0800;
-    public const int OFN_HIDEREADONLY = 0x0004;
-    public const int OFN_EXPLORER = 0x00080000;
 
     [LibraryImport("kernel32.dll", StringMarshalling = StringMarshalling.Utf16)]
     public static partial nint GetModuleHandleW(string? name);
@@ -76,11 +78,17 @@ internal static unsafe partial class Win32
     [LibraryImport("user32.dll")]
     public static partial int PostMessageW(nint hWnd, uint msg, nint wParam, nint lParam);
 
-    [LibraryImport("user32.dll")]
-    public static partial nuint SetTimer(nint hWnd, nuint id, uint elapseMs, nint func);
+    [LibraryImport("user32.dll", StringMarshalling = StringMarshalling.Utf16)]
+    public static partial uint RegisterWindowMessageW(string name);
 
     [LibraryImport("user32.dll")]
-    public static partial int KillTimer(nint hWnd, nuint id);
+    public static partial uint GetDpiForWindow(nint hWnd);
+
+    [LibraryImport("user32.dll")]
+    public static partial int GetSystemMetricsForDpi(int index, uint dpi);
+
+    [LibraryImport("user32.dll")]
+    public static partial int GetSystemMetrics(int index);
 
     [LibraryImport("user32.dll")]
     public static partial nint CreatePopupMenu();
@@ -112,9 +120,6 @@ internal static unsafe partial class Win32
 
     [LibraryImport("user32.dll")]
     public static partial int DestroyIcon(nint hIcon);
-
-    [LibraryImport("comdlg32.dll")]
-    public static partial int GetOpenFileNameW(ref OPENFILENAMEW ofn);
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -170,32 +175,4 @@ internal unsafe struct NOTIFYICONDATAW
     public uint dwInfoFlags;
     public Guid guidItem;
     public nint hBalloonIcon;
-}
-
-[StructLayout(LayoutKind.Sequential)]
-internal struct OPENFILENAMEW
-{
-    public int lStructSize;
-    public nint hwndOwner;
-    public nint hInstance;
-    public nint lpstrFilter;
-    public nint lpstrCustomFilter;
-    public int nMaxCustFilter;
-    public int nFilterIndex;
-    public nint lpstrFile;
-    public int nMaxFile;
-    public nint lpstrFileTitle;
-    public int nMaxFileTitle;
-    public nint lpstrInitialDir;
-    public nint lpstrTitle;
-    public int Flags;
-    public ushort nFileOffset;
-    public ushort nFileExtension;
-    public nint lpstrDefExt;
-    public nint lCustData;
-    public nint lpfnHook;
-    public nint lpTemplateName;
-    public nint pvReserved;
-    public int dwReserved;
-    public int FlagsEx;
 }
