@@ -6,7 +6,7 @@ namespace Loudswitch;
 
 /// <summary>
 /// 트레이 앱 설정. <c>%APPDATA%\Loudswitch\config.json</c>에 저장된다.
-/// (편집 UI는 이후 슬라이스 — 지금은 파일을 직접 편집)
+/// 트레이 메뉴로 바꾸거나 파일을 직접 편집한다.
 /// </summary>
 internal sealed class Config
 {
@@ -22,8 +22,13 @@ internal sealed class Config
     /// <summary>대상 엔드포인트 장치 GUID. <c>null</c>이면 기본 출력 장치(권장 기본값).</summary>
     public string? DeviceGuid { get; set; }
 
-    /// <summary>종료/장치 변경 시 Loudness를 OFF로 복원할지.</summary>
-    public bool RestoreOffOnDisable { get; set; } = true;
+    /// <summary>
+    /// 앱 종료·설정 변경·기본 장치 변경 때도, 앱이 켜 두었던 평준화를 <b>원래 상태로</b> 되돌릴지.
+    /// (대상 프로그램이 끝날 때는 이 값과 무관하게 항상 되돌린다.) false면 그때 기록만 지우고 지금 상태로 둔다.
+    /// JSON 이름은 기존 설정 파일과의 호환을 위해 예전 이름(RestoreOffOnDisable)을 유지한다.
+    /// </summary>
+    [JsonPropertyName("RestoreOffOnDisable")]
+    public bool RestoreOnExit { get; set; } = true;
 
     /// <summary>Loudness 토글 시 알림(토스트)을 표시할지.</summary>
     public bool NotifyOnToggle { get; set; } = true;

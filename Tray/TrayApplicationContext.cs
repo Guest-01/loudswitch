@@ -7,8 +7,12 @@ namespace Loudswitch.Tray;
 
 /// <summary>
 /// 트레이 컨트롤러(WinForms 없음). 앱이 실행 중인 동안 항상 대상 프로세스를 감시해
-/// 시작=ON / 종료=OFF로 Loudness EQ를 토글한다(멈추려면 앱 종료). 별도 "활성화" 토글은 없다.
+/// 시작=ON / 종료=<b>원래 상태로 복원</b>으로 Loudness EQ를 다룬다(멈추려면 앱 종료). 별도 "활성화" 토글은 없다.
 /// 트레이 아이콘은 현재 Loudness 상태(켜짐=컬러 / 꺼짐=회색)를 표시한다.
+///
+/// 복원 규칙: 앱이 평준화를 <b>직접 켠 장치만</b> <see cref="RestoreState"/>에 "원래 꺼짐"으로 기록하고,
+/// 대상 프로그램이 끝나면 그 기록대로 되돌린다. 사용자가 이미 켜 두었던 장치는 기록하지 않아 그대로 둔다.
+/// 기록은 파일로 남으므로 앱이 비정상 종료돼도 다음 실행 때 대상이 없으면 되돌린다.
 ///
 /// 스레드 모델: 모든 상태(_config, _endpointId, _watcher 등)는 <b>메시지 루프 스레드에서만</b> 읽고 쓴다.
 /// 메뉴·타이머는 원래 그 스레드에서 오고, 감시 콜백(스레드풀)은 <see cref="TrayShell.Post"/>로 넘겨온다.
@@ -27,6 +31,7 @@ internal sealed class TrayApplicationContext : IDisposable
     private const uint DefaultDeviceTimerMs = 3000;
 
     private readonly TrayShell _shell;
+    private readonly RestoreState _restore = RestoreState.Load();
 
     private Config _config;
     private string _processName;
@@ -67,7 +72,7 @@ internal sealed class TrayApplicationContext : IDisposable
             m.Separator();
             m.Check("토글 시 알림 표시", _config.NotifyOnToggle, ToggleNotify);
             m.Check("Windows 시작 시 자동 실행", Autostart.IsEnabled(), ToggleAutostart);
-            m.Check("종료 시 평준화도 끄기", _config.RestoreOffOnDisable, ToggleRestoreOff);
+            m.Check("앱 종료·설정 변경 시에도 원래대로 되돌리기", _config.RestoreOnExit, ToggleRestoreOnExit);
             m.Separator();
             m.Item("설정 파일 열기…", OpenConfigFile);
             m.Item("종료", Quit);
@@ -147,9 +152,9 @@ internal sealed class TrayApplicationContext : IDisposable
 
     private void ToggleAutostart() => Autostart.SetEnabled(!Autostart.IsEnabled());
 
-    private void ToggleRestoreOff()
+    private void ToggleRestoreOnExit()
     {
-        _config.RestoreOffOnDisable = !_config.RestoreOffOnDisable;
+        _config.RestoreOnExit = !_config.RestoreOnExit;
         _config.Save();
     }
 
@@ -178,10 +183,10 @@ internal sealed class TrayApplicationContext : IDisposable
 
     // ---------------------------------------------------------------- 코어 로직
 
-    /// <summary>설정 변경 후 대상 재해석 + 감시 재시작(이전 대상엔 설정대로 OFF 복원).</summary>
+    /// <summary>설정 변경 후 대상 재해석 + 감시 재시작(앱이 바꿔 둔 장치는 설정대로 원래 상태로).</summary>
     private void Reconfigure()
     {
-        StopWatching(restore: true); // 이전 _endpointId 기준 OFF 복원 + 감시/타이머 중지
+        StopWatching(restore: true); // 감시/타이머 중지 + 원래 상태 복원(설정에 따라)
         _processName = _config.ProcessName;
         _endpointId = EndpointResolver.Resolve(_config.DeviceGuid);
 
@@ -204,8 +209,25 @@ internal sealed class TrayApplicationContext : IDisposable
         _shell.StopDefaultDeviceTimer();
         _watcher?.Dispose();
         _watcher = null;
-        if (restore && _config.RestoreOffOnDisable)
-            Apply(false, notify: false);
+        if (restore)
+            RestoreOrForget();
+    }
+
+    /// <summary>
+    /// 앱 종료·설정 변경·기본 장치 변경 때 호출. 설정이 켜져 있으면 원래 상태로 되돌리고,
+    /// 꺼져 있으면 기록만 지운다(평준화는 지금 상태 그대로 둠).
+    /// </summary>
+    private void RestoreOrForget()
+    {
+        if (_config.RestoreOnExit)
+        {
+            RestoreAll(notify: false);
+        }
+        else if (_restore.Pending.Count > 0)
+        {
+            _restore.Pending.Clear();
+            _restore.Save();
+        }
     }
 
     private void StartWatcher()
@@ -213,7 +235,8 @@ internal sealed class TrayApplicationContext : IDisposable
         if (string.IsNullOrWhiteSpace(_processName))
             return; // 대상 프로그램 미설정 → 감시/토글 안 함
 
-        // syncInitialState=true: 시작 시 대상이 떠 있지 않으면 OFF로 동기화(크래시 잔존 ON 정리).
+        // syncInitialState=true: 시작 시 대상이 떠 있지 않으면 Stopped가 한 번 발생 →
+        // 이전 실행(비정상 종료 포함)이 남긴 복원 기록을 처리한다. 기록이 없으면 아무것도 바꾸지 않는다.
         var watcher = new ProcessWatcher(_processName, syncInitialState: true);
         _watcher = watcher;
 
@@ -223,12 +246,12 @@ internal sealed class TrayApplicationContext : IDisposable
         watcher.Started += _ => _shell.Post(() =>
         {
             if (_watcher == watcher)
-                Apply(true, notify: true);
+                OnTargetStarted();
         });
         watcher.Stopped += () => _shell.Post(() =>
         {
             if (_watcher == watcher)
-                Apply(false, notify: true);
+                RestoreAll(notify: true);
         });
         watcher.Start();
     }
@@ -246,8 +269,7 @@ internal sealed class TrayApplicationContext : IDisposable
         if (current is null || current == _endpointId)
             return;
 
-        if (_config.RestoreOffOnDisable)
-            Apply(false, notify: false); // 이전 기본 장치 복원
+        RestoreOrForget(); // 이전 기본 장치를 원래 상태로(설정에 따라)
 
         _endpointId = current;
         _watcher?.Dispose();
@@ -257,26 +279,69 @@ internal sealed class TrayApplicationContext : IDisposable
     }
 
     /// <summary>
-    /// Loudness를 토글하고 아이콘을 갱신한다. <paramref name="notify"/>가 true이고 <b>실제 상태가
-    /// 바뀐 경우에만</b> 알림을 띄운다(설정에 따라). 내부 housekeeping은 notify=false로 조용히 처리.
+    /// 대상 프로그램 시작. 평준화가 꺼져 있을 때만 켜고, 그 장치를 "원래 꺼짐"으로 기록한다.
+    /// 이미 켜져 있으면(사용자가 켜 둠) 건드리지도 기록하지도 않는다 → 종료 후에도 켜진 채 유지.
     /// </summary>
-    private void Apply(bool on, bool notify)
+    private void OnTargetStarted()
     {
         if (_endpointId is null)
             return;
+        string endpointId = _endpointId;
 
-        LoudnessController.ApplyResult result = LoudnessController.Apply(_endpointId, on);
-        if (result is not (LoudnessController.ApplyResult.Set or LoudnessController.ApplyResult.Unchanged))
+        LoudnessEqualizationSetting.Report before = LoudnessEqualizationSetting.Read(endpointId);
+        if (before.State != LoudnessEqualizationSetting.State.Off)
+        {
+            UpdateIcon(); // 미지원이거나 이미 켜짐 → 바꿀 것 없음
             return;
+        }
+
+        // 기록을 먼저 남기고 켠다: 켠 직후 비정상 종료돼도 다음 실행 때 되돌릴 수 있도록.
+        bool newlyRecorded = _restore.Pending.TryAdd(endpointId, false);
+        if (newlyRecorded)
+            _restore.Save();
+
+        LoudnessController.ApplyResult result = LoudnessController.Apply(endpointId, true);
+        if (result != LoudnessController.ApplyResult.Set && newlyRecorded)
+        {
+            _restore.Pending.Remove(endpointId); // 켜지 못했으면 되돌릴 것도 없다
+            _restore.Save();
+        }
 
         UpdateIcon();
-        if (notify && result == LoudnessController.ApplyResult.Set && _config.NotifyOnToggle)
-            _shell.Notify("Loudswitch", on ? "음량 평준화를 켰습니다." : "음량 평준화를 껐습니다.");
+        if (result == LoudnessController.ApplyResult.Set && _config.NotifyOnToggle)
+            _shell.Notify("Loudswitch", "음량 평준화를 켰습니다.");
+    }
+
+    /// <summary>
+    /// 기록된 장치를 모두 원래 상태로 되돌린다(대상 프로그램 종료 시, 또는 설정에 따라 앱 종료·변경 시).
+    /// 현재 대상 장치가 아니어도 기록된 장치 그대로 되돌린다(장치 변경·비정상 종료 대비).
+    /// 쓰기에 실패한 장치는 기록을 남겨 다음 기회에 다시 시도한다.
+    /// </summary>
+    private void RestoreAll(bool notify)
+    {
+        if (_restore.Pending.Count == 0)
+            return;
+
+        bool changed = false;
+        foreach ((string endpointId, bool originalOn) in _restore.Pending.ToArray())
+        {
+            LoudnessController.ApplyResult result = LoudnessController.Apply(endpointId, originalOn);
+            if (result == LoudnessController.ApplyResult.Failed)
+                continue;
+
+            _restore.Pending.Remove(endpointId); // Set / Unchanged / 미지원(장치 사라짐 등) → 기록 정리
+            changed |= result == LoudnessController.ApplyResult.Set;
+        }
+        _restore.Save();
+
+        UpdateIcon();
+        if (notify && changed && _config.NotifyOnToggle)
+            _shell.Notify("Loudswitch", "음량 평준화를 원래 상태로 되돌렸습니다.");
     }
 
     private void Quit()
     {
-        StopWatching(restore: true); // 종료 시 OFF 복원(설정에 따라) + 감시 중지
+        StopWatching(restore: true); // 감시 중지 + 원래 상태 복원(설정에 따라)
         _shell.Quit();               // 메시지 루프 종료 → Run() 반환 → Dispose
     }
 
